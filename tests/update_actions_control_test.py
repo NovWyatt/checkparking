@@ -218,6 +218,34 @@ def _test_update_center_primary_actions() -> None:
         os.environ["APPDATA"] = old_appdata
 
 
+def _test_packaged_github_default() -> None:
+    import check_vehicle_ocr.app as app_module
+
+    old_appdata = os.environ.get("APPDATA")
+    original_repository = app_module.GITHUB_REPOSITORY
+    had_frozen = hasattr(app_module.sys, "frozen")
+    original_frozen = getattr(app_module.sys, "frozen", None)
+    with tempfile.TemporaryDirectory() as temporary:
+        os.environ["APPDATA"] = temporary
+        app_module.GITHUB_REPOSITORY = "NovWyatt/checkparking"
+        app_module.sys.frozen = True
+        app = app_module.CheckVehicleApp()
+        try:
+            assert app._update_source_mode_key() == "github"
+            assert app.github_repository_var.get() == "NovWyatt/checkparking"
+        finally:
+            app.destroy()
+            app_module.GITHUB_REPOSITORY = original_repository
+            if had_frozen:
+                app_module.sys.frozen = original_frozen
+            else:
+                delattr(app_module.sys, "frozen")
+    if old_appdata is None:
+        os.environ.pop("APPDATA", None)
+    else:
+        os.environ["APPDATA"] = old_appdata
+
+
 def _test_combobox_states() -> None:
     old_appdata = os.environ.get("APPDATA")
     with tempfile.TemporaryDirectory() as temporary:
@@ -254,6 +282,7 @@ def main() -> int:
     _test_runtime_activation()
     _test_tesseract_verified_package()
     _test_update_center_primary_actions()
+    _test_packaged_github_default()
     _test_combobox_states()
     print("update_actions_control_test OK")
     return 0

@@ -386,11 +386,18 @@ class CheckVehicleApp(tk.Tk):
         self.telegram_mask_plate_var = tk.BooleanVar(value=bool(telegram_settings.get("mask_plate_number", False)))
 
         update_settings = self.settings.get("updates") if isinstance(self.settings.get("updates"), dict) else {}
-        saved_update_source_mode = str(update_settings.get("source_mode") or "").strip().lower()
+        embedded_release_repository = GITHUB_REPOSITORY if getattr(sys, "frozen", False) else ""
+        raw_update_source_mode = update_settings.get("source_mode")
+        saved_update_source_mode = str(raw_update_source_mode or "").strip().lower()
         if saved_update_source_mode not in {"disabled", "github", "manifest"}:
-            saved_update_source_mode = "manifest" if update_settings.get("manifest_url") else "disabled"
+            saved_update_source_mode = "github" if embedded_release_repository else ("manifest" if update_settings.get("manifest_url") else "disabled")
+        elif raw_update_source_mode is None and embedded_release_repository:
+            # A packaged build embeds its own GitHub repository.  A fresh
+            # profile should use that safe public release source immediately,
+            # while an explicit operator choice of “Tắt cập nhật” is retained.
+            saved_update_source_mode = "github"
         self.update_source_mode_var = tk.StringVar(value=UPDATE_SOURCE_LABELS[saved_update_source_mode])
-        self.github_repository_var = tk.StringVar(value=str(update_settings.get("github_repository") or GITHUB_REPOSITORY or ""))
+        self.github_repository_var = tk.StringVar(value=str(update_settings.get("github_repository") or embedded_release_repository or ""))
         self.github_token_var = tk.StringVar(value=str(update_settings.get("github_token") or ""))
         self.update_manifest_url_var = tk.StringVar(value=str(update_settings.get("manifest_url") or ""))
         self.paddle_release_source_var = tk.StringVar(value=str(update_settings.get("paddle_release_source") or PYPI_PADDLEOCR_URL))

@@ -8,7 +8,7 @@ embed their exact build date, commit and GitHub repository.
 
 from __future__ import annotations
 
-VERSION = "1.7.0"
+VERSION = "1.7.1"
 
 try:
     from ._build_meta import BUILD_DATE, COMMIT_SHA, GITHUB_REPOSITORY

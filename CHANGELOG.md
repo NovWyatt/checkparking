@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.7.1 — Packaged GitHub Releases default
+
+- Fresh packaged profiles now use the repository embedded in build metadata as
+  their GitHub Releases source by default.
+- An explicit operator choice to turn updates off is preserved.
+
 ## 1.7.0 — First managed-release version
 
 - Added a single release version source and build metadata.
