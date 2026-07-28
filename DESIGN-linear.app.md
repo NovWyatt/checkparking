@@ -23,17 +23,17 @@ Spacing: 4, 8, 12, 16, 24, 32, 48 px. Radius control 8 px, panel 12 px, modal 14
 
 - `AppState`: session ảnh/kết quả, filter, batch progress, notification và page hiện tại.
 - Worker chỉ đưa event immutable vào queue. Tkinter widget/`StringVar` chỉ cập nhật từ `_drain_events` trên UI thread.
-- Sidebar cố định gồm Quét ảnh, Phiên hiện tại, Cần kiểm tra, Xuất Excel, AI Providers, Telegram, Cập nhật và Cài đặt.
+- Sidebar cố định chỉ gồm Quét ảnh, Kết quả và Cài đặt. Các route cũ được map nội bộ để không làm mất workflow, nhưng không xuất hiện như page riêng.
 - Header hiển thị tên page, engine/model, online/offline/model status và một action chính theo page.
 - Content dùng input/progress/result/detail panels; setting nâng cao collapsible.
 
 ## Luồng chính
 
-1. Empty state giải thích cách chọn ảnh/folder, Ctrl+O/Ctrl+Shift+O.
-2. Scan page có input, mode FAST/BALANCED/THOROUGH, worker split và Start (Ctrl+Enter).
-3. Running state giữ progress, completed/total, current image, elapsed, ETA, images/minute, active workers, review/error count. UI update tối đa 200 ms.
-4. Result table hỗ trợ search/filter/sort/keyboard; detail panel phải hiện raw, cleaned, normalized, suggestions, flags, confidence và correction.
-5. Export dùng snapshot nền; Excel page hiển thị compact/full option và trạng thái export.
+1. Quét ảnh chỉ có ba bước: chọn dữ liệu, chọn cách nhận diện, bắt đầu. Người vận hành chọn Cục bộ, Cục bộ + AI kiểm tra ảnh khó hoặc AI trực tuyến; engine/provider/queue chỉ nằm trong phần nâng cao.
+2. Chế độ quét dùng Nhanh, Cân bằng — Khuyên dùng, Kỹ. Hiệu năng dùng Tự động — Khuyên dùng, Tiết kiệm RAM hoặc Ưu tiên tốc độ; PaddleOCR cục bộ luôn một inference worker.
+3. Running state giữ progress, completed/total, current image, elapsed, ETA, images/minute, review/error count. UI update tối đa 200 ms, không hiển thị queue hay số worker trên màn hình chính.
+4. Kết quả gộp danh sách, filter Tất cả/Cần kiểm tra/Có lỗi, tìm kiếm, export và review detail. Detail hiện ảnh, crop, OCR thô, kết quả chọn, gợi ý, confidence, cảnh báo và sửa thủ công.
+5. Cài đặt gồm Chung, AI trực tuyến, Thông báo, Cập nhật và Nâng cao. Update Center tách rõ ứng dụng, PaddleOCR, model và Tesseract dự phòng; không tự cập nhật package/model/binary.
 
 ## Accessibility và keyboard
 
@@ -43,9 +43,9 @@ Spacing: 4, 8, 12, 16, 24, 32, 48 px. Radius control 8 px, panel 12 px, modal 14
 
 ## Service page contracts
 
-- Provider: API key masked, base URL, model manual/dynamic, refresh/test có status/timestamp/cache.
+- Provider: API key masked, base URL, model manual/dynamic, refresh/test có status/timestamp/cache. API mode chỉ hiển thị trong tùy chọn nâng cao.
 - Telegram: token/chat ID, test, start/progress/complete/error, interval và mask plate. Mọi lỗi Telegram chỉ thành notification/log.
-- Update: manifest URL là cấu hình trống mặc định; parse/checksum/download temp/rollback plan. Không tự cài và không hardcode release URL.
+- Update: nguồn app manifest là cấu hình trống mặc định; parse/checksum/download temp/rollback plan. PaddleOCR chỉ check release xác định từ nguồn chính thức và đưa ra kế hoạch staging; model chỉ stage version mới có checksum; Tesseract không auto-install.
 
 ## Acceptance
 
@@ -53,7 +53,7 @@ Startup, light/dark, 1366x768 logical layout, keyboard, empty/loading/error/succ
 
 ## Trạng thái triển khai milestone UI
 
-- `check_vehicle_ocr/ui/` là presentation layer: shell/sidebar/header, theme semantic token và các page quét, phiên, review, export, provider, Telegram, cập nhật, cài đặt.
+- `check_vehicle_ocr/ui/` là presentation layer: shell/sidebar/header, theme semantic token và ba page Quét ảnh, Kết quả, Cài đặt.
 - `check_vehicle_ocr/app.py` giữ vai trò composition root/controller; worker và service không được phép gọi widget Tkinter trực tiếp.
 - PaddleOCR dùng một inference worker cho shared predictor; decode/EXIF ảnh có thể chạy song song ở image pool. API provider dùng pool riêng.
 - Tiến trình batch được snapshot qua event queue và render tối đa theo chu kỳ UI, không render toàn bảng ở worker thread.

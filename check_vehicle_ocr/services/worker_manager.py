@@ -34,7 +34,7 @@ class WorkerSettings:
 
         # A PaddleOCR engine contains one shared predictor.  Its calls remain
         # serialized unless an independently benchmarked engine pool is added.
-        if engine_mode == "PaddleOCR Local":
+        if engine_mode in {"PaddleOCR Local", "PaddleOCR + AI Review"}:
             local_ocr_workers = 1
 
         return WorkerSettings(

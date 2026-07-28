@@ -1,29 +1,29 @@
 {
-  "available_memory_mb_before": 5054.578125,
+  "available_memory_mb_before": 2839.75390625,
   "batches": {
     "10": {
       "shared_one_worker": {
-        "cold_init_seconds": 1.5544636999984505,
-        "batch_seconds": 7.966059200000018,
-        "images_per_minute": 75.31955072590958,
-        "peak_working_set_mb": 355.73046875,
+        "cold_init_seconds": 1.2500093999988167,
+        "batch_seconds": 7.975186199997552,
+        "images_per_minute": 75.23335317239166,
+        "peak_working_set_mb": 355.72265625,
         "engine_count": 1,
         "errors": 0
       },
       "two_independent_engines": {
-        "cold_init_seconds": 1.9823983999958728,
-        "batch_seconds": 7.776683000003686,
-        "images_per_minute": 77.15371707959751,
-        "peak_working_set_mb": 410.47265625,
+        "cold_init_seconds": 1.5156394000077853,
+        "batch_seconds": 7.553038700003526,
+        "images_per_minute": 79.4382266305242,
+        "peak_working_set_mb": 409.30078125,
         "engine_count": 2,
         "errors": 0,
         "matches_baseline": true
       },
       "two_processes": {
-        "cold_init_seconds": 1.8079912999965018,
-        "batch_seconds": 9.600141799994162,
-        "images_per_minute": 62.49907683659057,
-        "peak_working_set_mb": 819.66796875,
+        "cold_init_seconds": 1.2386531999945873,
+        "batch_seconds": 8.331226700000116,
+        "images_per_minute": 72.01820591438133,
+        "peak_working_set_mb": 741.03125,
         "engine_count": 2,
         "errors": 0,
         "matches_baseline": true

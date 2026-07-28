@@ -11,7 +11,7 @@ from typing import Any
 
 APP_DIR_NAME = "CheckVehicleOCR"
 SETTINGS_FILE = "settings.json"
-SETTINGS_VERSION = 11
+SETTINGS_VERSION = 12
 
 
 def settings_path() -> Path:
@@ -64,7 +64,41 @@ def migrate_settings(data: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(migrated["telegram"], dict):
         migrated["telegram"] = {}
     migrated.setdefault("updates", {"manifest_url": "", "channel": "stable", "auto_install": False})
+    if not isinstance(migrated["updates"], dict):
+        migrated["updates"] = {"manifest_url": "", "channel": "stable", "auto_install": False}
+    migrated["updates"].setdefault("paddle_release_source", "https://pypi.org/pypi/paddleocr/json")
+    migrated["updates"].setdefault("model_manifest_url", "")
+    engine = str(migrated.get("engine") or "PaddleOCR Local")
+    recognition_mode = str(migrated.get("recognition_mode") or "").strip()
+    if recognition_mode not in {"local", "local_ai_review", "online"}:
+        if engine == "PaddleOCR + AI Review":
+            recognition_mode = "local_ai_review"
+        elif engine in {"OpenAI Compatible", "GPT Vision", "Gemini Vision", "Plate Recognizer"}:
+            recognition_mode = "online"
+        else:
+            recognition_mode = "local"
+    migrated["recognition_mode"] = recognition_mode
+    migrated.setdefault("tesseract_fallback_enabled", engine == "Local OCR")
+    migrated.setdefault("export_reviewed_only", False)
+    migrated.setdefault("performance_preset", _performance_preset_from_legacy(migrated))
+    if migrated.get("paddle_scan_mode") == "Cân bằng":
+        migrated["paddle_scan_mode"] = "Cân bằng — Khuyên dùng"
+    elif migrated.get("paddle_scan_mode") == "Quét kỹ":
+        migrated["paddle_scan_mode"] = "Kỹ"
     return migrated
+
+
+def _performance_preset_from_legacy(data: dict[str, Any]) -> str:
+    try:
+        image_workers = int(data.get("image_workers") or data.get("worker_count") or 0)
+        api_workers = int(data.get("api_workers") or 0)
+    except (TypeError, ValueError):
+        return "AUTO"
+    if image_workers <= 1 and api_workers <= 1:
+        return "LOW_MEMORY"
+    if image_workers >= 3 or api_workers >= 3:
+        return "FAST"
+    return "AUTO"
 
 
 def save_settings(

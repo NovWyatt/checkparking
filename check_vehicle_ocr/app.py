@@ -32,6 +32,7 @@ from .telegram_notify import AsyncTelegramNotifier, TelegramSettings
 from .ui import ApplicationShell
 from .ui.state import AppUiState
 from .ui.theme import colors as ui_colors, configure_styles
+from .update_center import PYPI_PADDLEOCR_URL, PaddleRelease, build_paddle_staging_plan, fetch_paddle_release, paddle_model_inventory, paddle_runtime_info
 from .updater import UpdateManifest, compare_versions, download_verified, fetch_manifest
 
 
@@ -102,8 +103,15 @@ DANGER = THEMES["light"]["danger"]
 
 ENGINE_CHOICES = ("PaddleOCR Local", "Gemini Vision", "Plate Recognizer", "GPT Vision", "OpenAI Compatible", "Local OCR")
 API_ENGINE_CHOICES = {"Plate Recognizer", "Gemini Vision", "GPT Vision", "OpenAI Compatible"}
-PADDLE_SCAN_MODE_CHOICES = ("Cân bằng", "Nhanh", "Quét kỹ")
-PADDLE_SCAN_MODE_DEFAULT = "Cân bằng"
+HYBRID_ENGINE_MODE = "PaddleOCR + AI Review"
+PADDLE_SCAN_MODE_CHOICES = ("Nhanh", "Cân bằng — Khuyên dùng", "Kỹ")
+PADDLE_SCAN_MODE_DEFAULT = "Cân bằng — Khuyên dùng"
+RECOGNITION_MODES = {"local", "local_ai_review", "online"}
+PERFORMANCE_PRESET_LABELS = {
+    "AUTO": "Tự động — Khuyên dùng",
+    "LOW_MEMORY": "Tiết kiệm RAM",
+    "FAST": "Ưu tiên tốc độ",
+}
 
 
 class _UnavailableEngine:
@@ -113,6 +121,38 @@ class _UnavailableEngine:
     @property
     def available(self) -> bool:
         return False
+
+
+class _HybridReviewEngine:
+    """PaddleOCR first, then one configured online provider only when needed."""
+
+    def __init__(self, local_engine: PaddleOcrEngine, online_engine: GptVisionEngine):
+        self.local_engine = local_engine
+        self.online_engine = online_engine
+        self.reason = ""
+
+    @property
+    def available(self) -> bool:
+        local_ready = self.local_engine.available
+        online_ready = self.online_engine.available
+        if not local_ready:
+            self.reason = self.local_engine.reason
+        elif not online_ready:
+            self.reason = self.online_engine.reason
+        return local_ready and online_ready
+
+
+def _result_has_readable_plate(result: ImageResult) -> bool:
+    return any(plate.readable and plate.final_text for plate in result.plates)
+
+
+def _needs_online_review(result: ImageResult) -> bool:
+    return (
+        result.status != "OK"
+        or bool(result.warnings)
+        or not _result_has_readable_plate(result)
+        or any(plate.needs_review for plate in result.plates)
+    )
 
 
 class CheckVehicleApp(tk.Tk):
@@ -149,13 +189,18 @@ class CheckVehicleApp(tk.Tk):
         self._theme_text_var = tk.StringVar()
         self.ui_state = AppUiState()
         self.notification_var = tk.StringVar(value="Sẵn sàng")
-        self.header_status_var = tk.StringVar(value="Local • engine chưa khởi tạo")
+        self.header_status_var = tk.StringVar(value="OCR cục bộ — PaddleOCR • sẵn sàng")
         self.input_summary_var = tk.StringVar(value="Chưa có ảnh nào được chọn.")
         self.session_search_var = tk.StringVar()
+        self.result_filter_var = tk.StringVar(value="Tất cả")
         self.progress_primary_var = tk.StringVar(value="Chưa có batch đang chạy")
         self.progress_timing_var = tk.StringVar(value="")
         self.progress_workers_var = tk.StringVar(value="")
         self.progress_detail_var = tk.StringVar(value="")
+        self.scan_mode_hint_var = tk.StringVar()
+        self.performance_hint_var = tk.StringVar()
+        self.ai_config_warning_var = tk.StringVar()
+        self.advanced_worker_summary_var = tk.StringVar()
         self.local_ocr_hint_var = tk.StringVar()
         self.export_status_var = tk.StringVar(value="Chưa có dữ liệu để xuất.")
         self.provider_status_var = tk.StringVar(value="Chưa kiểm tra kết nối.")
@@ -163,17 +208,28 @@ class CheckVehicleApp(tk.Tk):
         self.update_status_var = tk.StringVar(value="Chưa kiểm tra cập nhật.")
         self.update_notes_var = tk.StringVar(value="")
         self.update_version_var = tk.StringVar(value=f"Phiên bản hiện tại: {__version__} • Build source: không xác định")
+        self.paddle_runtime_var = tk.StringVar(value="Đang đọc thông tin PaddleOCR cục bộ…")
+        self.paddle_compatibility_var = tk.StringVar(value="Chưa kiểm tra tương thích.")
+        self.paddle_update_status_var = tk.StringVar(value="Chưa kiểm tra bản PaddleOCR mới.")
+        self.paddle_release_notes_var = tk.StringVar(value="Chưa có ghi chú phát hành.")
+        self.model_inventory_var = tk.StringVar(value="Đang đọc model cục bộ…")
+        self.model_update_status_var = tk.StringVar(value="Chưa cấu hình nguồn model đã xác minh.")
+        self.tesseract_status_var = tk.StringVar(value="Chưa kiểm tra Tesseract dự phòng.")
         self.batch_progress: BatchProgress | None = None
         self.worker_manager: WorkerManager | None = None
         self.telegram_notifier: AsyncTelegramNotifier | None = None
         self.telegram_percent_sent: set[int] = set()
         self.current_update_manifest: UpdateManifest | None = None
+        self.current_paddle_release: PaddleRelease | None = None
         self.custom_secret_entries: list[ttk.Entry] = []
         self.custom_model_combo: ttk.Combobox | None = None
         self.provider_refresh_button: ttk.Button | None = None
         self.provider_test_button: ttk.Button | None = None
         self.update_check_button: ttk.Button | None = None
         self.update_download_button: ttk.Button | None = None
+        self.paddle_stage_button: ttk.Button | None = None
+        self.settings_notebook: ttk.Notebook | None = None
+        self._tesseract_check_inflight = False
         self._last_progress_render_at = 0.0
         self.cpu_count = max(1, os.cpu_count() or 1)
         self.engine_choices = ENGINE_CHOICES
@@ -189,9 +245,14 @@ class CheckVehicleApp(tk.Tk):
         if saved_engine not in ENGINE_CHOICES:
             saved_engine = "PaddleOCR Local"
 
+        self.output_dir_var = tk.StringVar(value=str(output_dir))
         self.output_var = tk.StringVar(value=str(output_dir / f"vehicle_plates_{datetime.now():%Y%m%d_%H%M%S}.xlsx"))
         self.embed_excel_images_var = tk.BooleanVar(value=bool(self.settings.get("embed_excel_images", True)))
+        self.export_reviewed_only_var = tk.BooleanVar(value=bool(self.settings.get("export_reviewed_only", False)))
+        self.windows_notifications_var = tk.BooleanVar(value=bool(self.settings.get("windows_notifications", False)))
         self.engine_var = tk.StringVar(value=saved_engine)
+        saved_recognition_mode = str(self.settings.get("recognition_mode") or _recognition_mode_from_engine(saved_engine))
+        self.recognition_mode_var = tk.StringVar(value=saved_recognition_mode if saved_recognition_mode in RECOGNITION_MODES else "local")
         self.openai_api_key_var = tk.StringVar(value=str(self.settings.get("api_key") or os.environ.get("OPENAI_API_KEY", "")))
         self.gemini_api_key_var = tk.StringVar(value=str(self.settings.get("gemini_api_key") or os.environ.get("GEMINI_API_KEY", "")))
         self.plate_recognizer_token_var = tk.StringVar(
@@ -222,6 +283,7 @@ class CheckVehicleApp(tk.Tk):
         )
 
         self.tesseract_var = tk.StringVar(value=str(self.settings.get("tesseract_path") or find_tesseract() or ""))
+        self.tesseract_fallback_enabled_var = tk.BooleanVar(value=bool(self.settings.get("tesseract_fallback_enabled", False)))
         self.recursive_var = tk.BooleanVar(value=bool(self.settings.get("recursive", True)))
         self.blur_threshold_var = tk.DoubleVar(value=float(self.settings.get("blur_threshold", 80.0)))
         self.conf_threshold_var = tk.DoubleVar(value=float(self.settings.get("conf_threshold", 35.0)))
@@ -234,7 +296,16 @@ class CheckVehicleApp(tk.Tk):
         self.local_ocr_workers_var = tk.IntVar(value=int(self.settings.get("local_ocr_workers") or 1))
         self.api_workers_var = tk.IntVar(value=int(self.settings.get("api_workers") or 2))
         self.queue_capacity_var = tk.IntVar(value=int(self.settings.get("queue_capacity") or 32))
+        saved_performance = str(self.settings.get("performance_preset") or _performance_preset_from_workers(self.settings)).upper()
+        if saved_performance not in PERFORMANCE_PRESET_LABELS:
+            saved_performance = "AUTO"
+        self.performance_preset_choices = tuple(PERFORMANCE_PRESET_LABELS.values())
+        self.performance_preset_var = tk.StringVar(value=PERFORMANCE_PRESET_LABELS[saved_performance])
         saved_paddle_mode = str(self.settings.get("paddle_scan_mode") or PADDLE_SCAN_MODE_DEFAULT)
+        if saved_paddle_mode == "Cân bằng":
+            saved_paddle_mode = PADDLE_SCAN_MODE_DEFAULT
+        elif saved_paddle_mode == "Quét kỹ":
+            saved_paddle_mode = "Kỹ"
         if saved_paddle_mode not in PADDLE_SCAN_MODE_CHOICES:
             saved_paddle_mode = PADDLE_SCAN_MODE_DEFAULT
         self.paddle_scan_mode_var = tk.StringVar(value=saved_paddle_mode)
@@ -267,6 +338,8 @@ class CheckVehicleApp(tk.Tk):
 
         update_settings = self.settings.get("updates") if isinstance(self.settings.get("updates"), dict) else {}
         self.update_manifest_url_var = tk.StringVar(value=str(update_settings.get("manifest_url") or ""))
+        self.paddle_release_source_var = tk.StringVar(value=str(update_settings.get("paddle_release_source") or PYPI_PADDLEOCR_URL))
+        self.model_manifest_url_var = tk.StringVar(value=str(update_settings.get("model_manifest_url") or ""))
 
         self.status_var = tk.StringVar(value="Sẵn sàng")
         self.key_status_var = tk.StringVar()
@@ -283,9 +356,15 @@ class CheckVehicleApp(tk.Tk):
         self.status_var.trace_add("write", lambda *_args: self._update_header_status())
         self.engine_var.trace_add("write", lambda *_args: self._update_header_status())
         self.engine_var.trace_add("write", lambda *_args: self._sync_local_ocr_control())
+        self.recognition_mode_var.trace_add("write", lambda *_args: self._on_recognition_mode_changed())
+        self.performance_preset_var.trace_add("write", lambda *_args: self._on_performance_preset_changed())
+        self.paddle_scan_mode_var.trace_add("write", lambda *_args: self._update_scan_mode_hint())
         self.gpt_model_var.trace_add("write", lambda *_args: self._update_header_status())
         self.gemini_model_var.trace_add("write", lambda *_args: self._update_header_status())
         self.custom_model_var.trace_add("write", lambda *_args: self._update_header_status())
+        self._apply_performance_preset()
+        self._on_recognition_mode_changed()
+        self._update_scan_mode_hint()
         self._update_header_status()
         self._sync_local_ocr_control()
         self._update_key_status()
@@ -578,12 +657,14 @@ class CheckVehicleApp(tk.Tk):
             self._schedule_settings_save()
 
     def start_processing(self) -> None:
+        if not self._recognition_configuration_ready():
+            return
         self._start_processing(list(self.images), retry_failed=False)
 
     def retry_failed_images(self) -> None:
         failed_images = self._failed_image_paths()
         if not failed_images:
-            messagebox.showinfo("Khong co anh loi", "Khong con anh nao chua doc duoc de quet lai.", parent=self)
+            self._notify("Không còn ảnh nào cần quét lại.", "info")
             return
         self._start_processing(failed_images, retry_failed=True)
 
@@ -618,7 +699,10 @@ class CheckVehicleApp(tk.Tk):
         self.progress.configure(maximum=len(target_images), value=0)
         self.start_button.configure(state="disabled")
         self.stop_button.configure(state="normal")
-        self.retry_failed_button.configure(state="disabled")
+        retry_button = getattr(self, "retry_failed_button", None)
+        if retry_button is not None:
+            retry_button.configure(state="disabled")
+        self._refresh_primary_action()
         self._set_export_buttons_state("disabled")
         if hasattr(self, "export_reviewed_button"):
             self.export_reviewed_button.configure(state="disabled")
@@ -631,7 +715,7 @@ class CheckVehicleApp(tk.Tk):
         self.telegram_percent_sent.clear()
         self._start_telegram_lifecycle(len(target_images), engine_mode)
 
-        self.status_var.set(f"Đang chuẩn bị {engine_mode}...")
+        self.status_var.set("Đang chuẩn bị nhận diện…")
         self._log(f"Đang chuẩn bị {engine_mode} trong worker nền.")
         args = (
             list(target_images),
@@ -650,6 +734,7 @@ class CheckVehicleApp(tk.Tk):
             paddle_scan_mode,
             retry_failed,
             self._custom_provider_snapshot(),
+            bool(self.tesseract_fallback_enabled_var.get()),
         )
         self.worker = threading.Thread(target=self._worker_process, args=args, daemon=True)
         self.worker.start()
@@ -684,6 +769,7 @@ class CheckVehicleApp(tk.Tk):
         paddle_scan_mode: str,
         retry_failed: bool = False,
         custom_provider: dict[str, object] | None = None,
+        tesseract_fallback_enabled: bool = False,
     ) -> None:
         crop_dir = output_path.with_suffix("").parent / f"{output_path.stem}_crops"
         try:
@@ -727,7 +813,7 @@ class CheckVehicleApp(tk.Tk):
             def prepare(image: Path):
                 # Decode/exif conversion is independent from inference.  Passing
                 # the decoded frame to the local processor avoids a second read.
-                if engine_mode in {"PaddleOCR Local", "Local OCR"}:
+                if engine_mode in {"PaddleOCR Local", "Local OCR", HYBRID_ENGINE_MODE}:
                     image_bgr, image_size = load_image(image)
                     return image, image_bgr, image_size
                 if not image.is_file():
@@ -748,6 +834,7 @@ class CheckVehicleApp(tk.Tk):
                     paddle_scan_mode,
                     image_bgr=image_bgr,
                     image_size=image_size,
+                    tesseract_fallback_enabled=tesseract_fallback_enabled,
                 )
 
             def on_started(item: WorkItem[Path], pool: str) -> None:
@@ -774,8 +861,9 @@ class CheckVehicleApp(tk.Tk):
             completed_results = [result for result in ordered_results if isinstance(result, ImageResult)]
             progress.finish(cancelled=self.stop_event.is_set())
             emit_progress(force=True)
-            if engine_mode == "OpenAI Compatible" and getattr(engine, "last_api_mode", ""):
-                self.event_queue.put(("provider_capability", engine.last_api_mode))
+            api_engine = engine.online_engine if engine_mode == HYBRID_ENGINE_MODE else engine
+            if engine_mode in {"OpenAI Compatible", HYBRID_ENGINE_MODE} and getattr(api_engine, "last_api_mode", ""):
+                self.event_queue.put(("provider_capability", api_engine.last_api_mode))
             if retry_failed:
                 event_name = "done_retry_stopped" if self.stop_event.is_set() else "done_retry"
             else:
@@ -815,6 +903,21 @@ class CheckVehicleApp(tk.Tk):
                 api_mode=str(provider.get("api_mode") or "auto"),
                 cached_api_mode=str(provider.get("cached_api_mode") or ""),
             )
+        if engine_mode == HYBRID_ENGINE_MODE:
+            provider = custom_provider or {}
+            if not provider.get("enabled"):
+                return _UnavailableEngine("Cần bật dịch vụ AI trực tuyến để kiểm tra ảnh khó.")
+            if not str(provider.get("base_url") or "").strip() or not str(provider.get("api_key") or "").strip():
+                return _UnavailableEngine("Cần nhập địa chỉ dịch vụ và khóa API để kiểm tra ảnh khó.")
+            online_engine = GptVisionEngine(
+                str(provider.get("api_key") or ""),
+                str(provider.get("model") or gpt_model),
+                timeout=float(provider.get("timeout") or 45.0),
+                base_url=str(provider.get("base_url") or ""),
+                api_mode=str(provider.get("api_mode") or "auto"),
+                cached_api_mode=str(provider.get("cached_api_mode") or ""),
+            )
+            return _HybridReviewEngine(PaddleOcrEngine(25.0), online_engine)
         if engine_mode == "Gemini Vision":
             return GeminiVisionEngine(gemini_api_key, gemini_model)
         if engine_mode == "Plate Recognizer":
@@ -836,18 +939,19 @@ class CheckVehicleApp(tk.Tk):
         paddle_scan_mode: str = PADDLE_SCAN_MODE_DEFAULT,
         image_bgr=None,
         image_size: tuple[int, int] | None = None,
+        tesseract_fallback_enabled: bool = False,
     ) -> ImageResult:
         _ = index
         if engine_mode == "GPT Vision":
             return engine.analyze_image(image, blur_threshold)
         if engine_mode == "Gemini Vision":
             gemini_result = engine.analyze_image(image, blur_threshold)
-            if _needs_local_fallback(gemini_result):
+            if tesseract_fallback_enabled and _needs_local_fallback(gemini_result):
                 local_engine = TesseractOcrEngine(tesseract_path, confidence_threshold)
                 if local_engine.available:
                     local_result = process_image(image, crop_dir, local_engine, blur_threshold, max(20.0, confidence_threshold - 10.0))
                     return _merge_gemini_local_result(gemini_result, local_result)
-                gemini_result.warnings.append(f"Không fallback Local OCR được: {local_engine.reason}")
+                gemini_result.warnings.append(f"Không dùng được Tesseract dự phòng: {local_engine.reason}")
             return gemini_result
         if engine_mode == "Plate Recognizer":
             return engine.analyze_image(image, blur_threshold)
@@ -862,6 +966,25 @@ class CheckVehicleApp(tk.Tk):
                 image_bgr=image_bgr,
                 image_size=image_size,
             )
+        if engine_mode == HYBRID_ENGINE_MODE:
+            local_result = process_image(
+                image,
+                crop_dir,
+                engine.local_engine,
+                blur_threshold,
+                max(20.0, confidence_threshold - 10.0),
+                paddle_scan_mode=paddle_scan_mode,
+                image_bgr=image_bgr,
+                image_size=image_size,
+            )
+            if not _needs_online_review(local_result):
+                return local_result
+            online_result = engine.online_engine.analyze_image(image, blur_threshold)
+            if _result_has_readable_plate(online_result):
+                online_result.warnings.append("AI trực tuyến được dùng để kiểm tra vì OCR cục bộ chưa chắc chắn.")
+                return online_result
+            local_result.warnings.append("AI trực tuyến không xác nhận được thêm kết quả; giữ OCR cục bộ để kiểm tra.")
+            return local_result
         return process_image(image, crop_dir, engine, blur_threshold, confidence_threshold, image_bgr=image_bgr, image_size=image_size)
 
     def _drain_events(self) -> None:
@@ -877,8 +1000,8 @@ class CheckVehicleApp(tk.Tk):
                         self.detail_row_vars.clear()
                         self._refresh_table()
                     worker_text = self._format_worker_summary(workers)
-                    self.status_var.set(f"Đang quét {total} ảnh bằng {engine_mode}. {worker_text}")
-                    self._log(f"Engine sẵn sàng. Bắt đầu quét {total} ảnh bằng {engine_mode}.")
+                    self.status_var.set(f"Đang quét {total} ảnh. {worker_text}")
+                    self._log(f"Bắt đầu quét {total} ảnh bằng {engine_mode}.")
                 elif kind == "engine_unavailable":
                     _, reason = event
                     self.start_button.configure(state="normal")
@@ -886,9 +1009,10 @@ class CheckVehicleApp(tk.Tk):
                     self._set_export_buttons_state("normal" if self.results else "disabled")
                     self._set_review_buttons(bool(self.results))
                     self._update_retry_button()
-                    self.status_var.set("Engine chưa sẵn sàng")
+                    self.status_var.set("Chưa thể khởi tạo nhận diện")
                     self._log(f"Engine chưa sẵn sàng: {reason}")
-                    self._notify(f"Engine chưa sẵn sàng: {reason}", "error")
+                    self._notify(f"Chưa thể khởi tạo nhận diện: {reason}", "error")
+                    self._refresh_primary_action()
                 elif kind == "result":
                     _, completed, total, result, *rest = event
                     snapshot = rest[0] if rest else None
@@ -931,7 +1055,8 @@ class CheckVehicleApp(tk.Tk):
                     if rest:
                         self._apply_progress_snapshot(rest[0], force=True)
                     self._finish_telegram_lifecycle("completed")
-                    self._notify("Quét xong. Mở Phiên hiện tại để xem kết quả hoặc Xuất Excel để tạo báo cáo.", "success")
+                    self._notify("Quét xong. Mở Kết quả để xem, chỉnh sửa hoặc xuất Excel.", "success")
+                    self._refresh_primary_action()
                 elif kind == "done_retry":
                     _, results, *rest = event
                     for result in results:
@@ -950,6 +1075,7 @@ class CheckVehicleApp(tk.Tk):
                         self._apply_progress_snapshot(rest[0], force=True)
                     self._finish_telegram_lifecycle("completed")
                     self._notify(f"Quét lại xong: phục hồi {recovered} ảnh, còn {remaining} ảnh cần kiểm tra.", "success")
+                    self._refresh_primary_action()
                 elif kind == "done_scan_stopped":
                     _, results, *rest = event
                     self.results = results
@@ -964,6 +1090,7 @@ class CheckVehicleApp(tk.Tk):
                     if rest:
                         self._apply_progress_snapshot(rest[0], force=True)
                     self._finish_telegram_lifecycle("cancelled")
+                    self._refresh_primary_action()
                 elif kind == "done_retry_stopped":
                     _, results, *rest = event
                     for result in results:
@@ -979,6 +1106,7 @@ class CheckVehicleApp(tk.Tk):
                     if rest:
                         self._apply_progress_snapshot(rest[0], force=True)
                     self._finish_telegram_lifecycle("cancelled")
+                    self._refresh_primary_action()
                 elif kind == "error":
                     _, message = event
                     self.start_button.configure(state="normal")
@@ -988,6 +1116,7 @@ class CheckVehicleApp(tk.Tk):
                     self._log(f"Lỗi: {message}")
                     self._finish_telegram_lifecycle("error", message)
                     self._notify(f"Batch gặp lỗi: {message}", "error")
+                    self._refresh_primary_action()
                 elif kind == "export_done":
                     _, reviewed, exported_path, exported_count = event
                     self._set_export_buttons_state("normal" if self.results else "disabled")
@@ -1043,6 +1172,34 @@ class CheckVehicleApp(tk.Tk):
                         self.update_check_button.configure(state="normal")
                     if self.update_download_button:
                         self.update_download_button.configure(state="normal" if self.current_update_manifest else "disabled")
+                elif kind == "paddle_checked":
+                    _, release = event
+                    self.current_paddle_release = release
+                    self.paddle_release_notes_var.set(f"Ghi chú phát hành: {release.release_notes_url}")
+                    current = paddle_runtime_info().paddleocr_version
+                    if current == "Chưa cài":
+                        self.paddle_update_status_var.set(f"PaddleOCR {release.version} có tại nguồn chính thức. Cần cài trong môi trường thử nghiệm.")
+                        can_stage = True
+                    else:
+                        comparison = compare_versions(release.version, current)
+                        can_stage = comparison > 0
+                        if comparison > 0:
+                            self.paddle_update_status_var.set(f"Có PaddleOCR {release.version}; máy đang dùng {current}. Chỉ thử nghiệm staging, không cập nhật trực tiếp.")
+                        elif comparison == 0:
+                            self.paddle_update_status_var.set(f"Máy đang dùng PaddleOCR {current}; không cần thử nghiệm lại.")
+                        else:
+                            self.paddle_update_status_var.set(f"Nguồn trả PaddleOCR {release.version}, cũ hơn phiên bản đang cài {current}.")
+                    if self.paddle_stage_button:
+                        self.paddle_stage_button.configure(state="normal" if can_stage else "disabled")
+                elif kind == "paddle_error":
+                    _, message = event
+                    self.paddle_update_status_var.set(message)
+                    if self.paddle_stage_button:
+                        self.paddle_stage_button.configure(state="disabled")
+                elif kind == "tesseract_status":
+                    _, message = event
+                    self._tesseract_check_inflight = False
+                    self.tesseract_status_var.set(message)
         except queue.Empty:
             pass
         self._drain_after_id = self.after(100, self._drain_events)
@@ -1050,14 +1207,141 @@ class CheckVehicleApp(tk.Tk):
     def show_page(self, page_name: str) -> None:
         self.shell.show_page(page_name)
 
+    def show_settings_section(self, section: str) -> None:
+        self.show_page("settings")
+        notebook = self.settings_notebook
+        page = self.shell.pages.get("settings")
+        if notebook is not None and page is not None and hasattr(page, "tabs"):
+            tab = page.tabs.get(section)
+            if tab is not None:
+                notebook.select(tab)
+
+    def _on_recognition_mode_changed(self) -> None:
+        mode = self.recognition_mode_var.get().strip()
+        if mode not in RECOGNITION_MODES:
+            mode = "local"
+            self.recognition_mode_var.set(mode)
+            return
+        engine_mode = {"local": "PaddleOCR Local", "local_ai_review": HYBRID_ENGINE_MODE, "online": "OpenAI Compatible"}[mode]
+        if self.engine_var.get() != engine_mode:
+            self.engine_var.set(engine_mode)
+        if mode == "local":
+            message = ""
+        elif self._online_provider_ready():
+            message = "AI trực tuyến đã sẵn sàng. Ảnh chỉ được gửi khi bạn bắt đầu quét."
+        else:
+            message = "Cần cấu hình dịch vụ AI trực tuyến trước khi dùng lựa chọn này."
+        self.ai_config_warning_var.set(message)
+        button = getattr(self, "open_ai_settings_button", None)
+        label = getattr(self, "ai_config_warning_label", None)
+        if button is not None:
+            if mode == "local":
+                button.grid_remove()
+            else:
+                button.grid()
+                button.configure(state="normal")
+        if label is not None:
+            if message:
+                label.grid()
+                label.configure(style="Warning.TLabel")
+            else:
+                label.grid_remove()
+        self._sync_local_ocr_control()
+
+    def _online_provider_ready(self) -> bool:
+        return bool(
+            self.custom_provider_enabled_var.get()
+            and self.custom_base_url_var.get().strip()
+            and self.custom_api_key_var.get().strip()
+            and self.custom_model_var.get().strip()
+        )
+
+    def _recognition_configuration_ready(self) -> bool:
+        if self.recognition_mode_var.get().strip() == "local" or self._online_provider_ready():
+            return True
+        self.ai_config_warning_var.set("Cần cấu hình dịch vụ AI trực tuyến trước khi bắt đầu quét.")
+        self._notify("AI trực tuyến chưa được cấu hình. Hãy mở Cài đặt → AI trực tuyến.", "warning")
+        return False
+
+    def _on_performance_preset_changed(self) -> None:
+        self._apply_performance_preset()
+
+    def _performance_preset_key(self) -> str:
+        selected = self.performance_preset_var.get().strip()
+        for key, label in PERFORMANCE_PRESET_LABELS.items():
+            if selected == label:
+                return key
+        return "AUTO"
+
+    def _apply_performance_preset(self) -> None:
+        preset = self._performance_preset_key()
+        if preset == "LOW_MEMORY":
+            self.worker_mode_var.set("MANUAL")
+            self.image_workers_var.set(1)
+            self.local_ocr_workers_var.set(1)
+            self.api_workers_var.set(1)
+            self.queue_capacity_var.set(8)
+            self.performance_hint_var.set("Dùng ít RAM hơn. Phù hợp khi máy đang chạy nhiều ứng dụng.")
+        elif preset == "FAST":
+            self.worker_mode_var.set("MANUAL")
+            self.image_workers_var.set(min(4, self.cpu_count))
+            self.local_ocr_workers_var.set(1)
+            self.api_workers_var.set(min(4, max(1, self.cpu_count // 2)))
+            self.queue_capacity_var.set(32)
+            self.performance_hint_var.set("Xử lý ảnh và yêu cầu AI song song trong giới hạn an toàn. PaddleOCR vẫn chạy một lượt để ổn định.")
+        else:
+            self.worker_mode_var.set("AUTO")
+            self.local_ocr_workers_var.set(1)
+            self.performance_hint_var.set("Ứng dụng tự chọn mức phù hợp với máy. Đây là lựa chọn nên dùng.")
+        self._sync_local_ocr_control()
+        self._update_advanced_worker_summary()
+
+    def _update_advanced_worker_summary(self) -> None:
+        self.advanced_worker_summary_var.set(
+            "Xử lý ảnh song song: "
+            f"{self._safe_int_var(self.image_workers_var, 1)} • "
+            "OCR cục bộ — PaddleOCR: 1 • "
+            f"Yêu cầu AI song song: {self._safe_int_var(self.api_workers_var, 1)} • "
+            f"Hàng chờ: {self._safe_int_var(self.queue_capacity_var, 1)}"
+        )
+
+    def _update_scan_mode_hint(self) -> None:
+        mode = self.paddle_scan_mode_var.get().strip()
+        if mode == "Nhanh":
+            self.scan_mode_hint_var.set("Ít bước xử lý, phù hợp ảnh rõ.")
+        elif mode == "Kỹ":
+            self.scan_mode_hint_var.set("Thử thêm nhiều cách xử lý cho ảnh khó, sẽ chậm hơn.")
+        else:
+            self.scan_mode_hint_var.set("Phù hợp hầu hết trường hợp.")
+
+    def export_selected_results(self) -> None:
+        if self.export_reviewed_only_var.get():
+            self.export_reviewed_results()
+        else:
+            self.export_all_results()
+
+    def choose_output_directory(self) -> None:
+        selected = filedialog.askdirectory(title="Chọn thư mục xuất Excel", initialdir=self.output_dir_var.get() or str(_default_output_dir()))
+        if not selected:
+            return
+        directory = Path(selected)
+        self.output_dir_var.set(str(directory))
+        self.output_var.set(str(directory / f"vehicle_plates_{datetime.now():%Y%m%d_%H%M%S}.xlsx"))
+        self._schedule_settings_save()
+
+    def _refresh_primary_action(self) -> None:
+        shell = getattr(self, "shell", None)
+        if shell is not None:
+            shell.refresh_primary_action()
+
     def _bind_shortcuts(self) -> None:
         self.bind_all("<Control-o>", lambda _event: self.add_files())
         self.bind_all("<Control-Shift-O>", lambda _event: self.add_folder())
         self.bind_all("<Control-Return>", lambda _event: self.start_processing())
-        self.bind_all("<Control-e>", lambda _event: self.export_all_results())
+        self.bind_all("<Control-e>", lambda _event: self.export_selected_results())
         self.bind_all("<Control-comma>", lambda _event: self.show_page("settings"))
         self.bind_all("<F5>", lambda _event: self.refresh_provider_models())
-        self.bind_all("<Control-f>", lambda _event: (self.show_page("session"), self.focus_session_search()))
+        self.bind_all("<Control-f>", lambda _event: (self.show_page("results"), self.focus_session_search()))
         self.bind_all("<Escape>", lambda _event: self.stop_processing())
 
     def focus_session_search(self) -> None:
@@ -1086,9 +1370,8 @@ class CheckVehicleApp(tk.Tk):
 
     @staticmethod
     def _format_worker_summary(workers: dict[str, int] | int) -> str:
-        if isinstance(workers, dict):
-            return f"Ảnh {workers.get('image', 0)} • OCR local {workers.get('local_ocr', 0)} • API {workers.get('api', 0)}"
-        return f"{workers} worker"
+        _ = workers
+        return "Ứng dụng đang tối ưu hiệu năng theo lựa chọn của bạn."
 
     def _apply_progress_snapshot(self, snapshot: dict[str, object], *, force: bool = False) -> None:
         now = datetime.now().timestamp()
@@ -1102,18 +1385,17 @@ class CheckVehicleApp(tk.Tk):
         self.progress.configure(maximum=max(1, total), value=completed)
         status = str(snapshot.get("status") or "")
         percent = int(snapshot.get("percent") or 0)
-        self.progress_primary_var.set(f"{status}: {completed}/{total} ảnh ({percent}%)")
+        self.progress_primary_var.set(f"{_display_batch_status(status)}: {completed}/{total} ảnh ({percent}%)")
         elapsed = float(snapshot.get("elapsed_seconds") or 0.0)
         rate = float(snapshot.get("images_per_minute") or 0.0)
         eta = snapshot.get("eta_seconds")
         eta_text = "ETA đang tính" if eta is None else f"ETA {self._format_duration(float(eta))}"
         self.progress_timing_var.set(f"Đã chạy {self._format_duration(elapsed)} • {rate:.1f} ảnh/phút • {eta_text}")
         active_workers = snapshot.get("active_workers") if isinstance(snapshot.get("active_workers"), dict) else {}
-        configured = snapshot.get("configured_workers") if isinstance(snapshot.get("configured_workers"), dict) else {}
-        self.progress_workers_var.set(f"Đang chạy {active_workers} / cấu hình {configured}")
+        self.progress_workers_var.set("Đang xử lý" if active_workers else "Đang chờ")
         current = ", ".join(str(value) for value in list(snapshot.get("current_files") or [])[:3]) or "Đang chờ task tiếp theo"
         self.progress_detail_var.set(
-            f"{current} • Thành công {snapshot.get('succeeded', 0)} • Review {snapshot.get('needs_review', 0)} • Lỗi {snapshot.get('failed', 0)}"
+            f"{current} • Thành công {snapshot.get('succeeded', 0)} • Cần kiểm tra {snapshot.get('needs_review', 0)} • Lỗi {snapshot.get('failed', 0)}"
         )
 
     @staticmethod
@@ -1305,32 +1587,95 @@ class CheckVehicleApp(tk.Tk):
 
         threading.Thread(target=worker, name="check_vehicle_update_download", daemon=True).start()
 
+    def refresh_update_center_state(self) -> None:
+        runtime = paddle_runtime_info()
+        self.paddle_runtime_var.set(f"PaddleOCR: {runtime.paddleocr_version} • PaddlePaddle: {runtime.paddlepaddle_version}")
+        self.paddle_compatibility_var.set(runtime.compatibility)
+        inventory = paddle_model_inventory()
+        details = []
+        for item in inventory:
+            status = "Đang hoạt động" if item.active else "Chưa tìm thấy"
+            checksum = "chưa có manifest checksum" if item.checksum is None else item.checksum
+            version = item.version or "không xác định"
+            downloaded_at = item.downloaded_at or "không xác định"
+            details.append(f"{item.role}: {item.name} — {status}; phiên bản {version}; {item.source}; checksum {checksum}; ngày tải {downloaded_at}.")
+        self.model_inventory_var.set("\n".join(details))
+        if not self.model_manifest_url_var.get().strip():
+            self.model_update_status_var.set("Chưa cấu hình nguồn model đã xác minh; không tải hoặc thay model.")
+
+    def check_paddle_updates(self) -> None:
+        source = self.paddle_release_source_var.get().strip()
+        if not source:
+            self.paddle_update_status_var.set("Chưa cấu hình nguồn kiểm tra PaddleOCR.")
+            return
+        self.paddle_update_status_var.set("Đang kiểm tra PaddleOCR ở nền…")
+
+        def worker() -> None:
+            try:
+                release = fetch_paddle_release(source)
+            except Exception as exc:
+                self.event_queue.put(("paddle_error", f"Không kiểm tra được PaddleOCR: {exc}"))
+            else:
+                self.event_queue.put(("paddle_checked", release))
+
+        threading.Thread(target=worker, name="check_vehicle_paddle_check", daemon=True).start()
+
+    def prepare_paddle_staging(self) -> None:
+        release = self.current_paddle_release
+        if release is None:
+            self.paddle_update_status_var.set("Hãy kiểm tra một phiên bản PaddleOCR cụ thể trước khi xem kế hoạch thử nghiệm.")
+            return
+        plan = build_paddle_staging_plan(release.version)
+        self.paddle_update_status_var.set(" ".join(plan.steps))
+
+    def refresh_tesseract_status(self) -> None:
+        if self._tesseract_check_inflight:
+            return
+        path = find_tesseract(self.tesseract_var.get().strip() or None)
+        if path is None:
+            self.tesseract_status_var.set("Tesseract dự phòng: Chưa cài hoặc chưa tìm thấy. Đây không phải yêu cầu bắt buộc khi PaddleOCR hoạt động.")
+            return
+        self._tesseract_check_inflight = True
+        self.tesseract_status_var.set("Đang kiểm tra Tesseract ở nền…")
+
+        def worker() -> None:
+            try:
+                completed = subprocess.run([str(path), "--version"], capture_output=True, text=True, timeout=4, check=False)
+                version_line = (completed.stdout or completed.stderr or "").splitlines()[0].strip() if (completed.stdout or completed.stderr) else "Không đọc được phiên bản"
+                tessdata = path.parent / "tessdata"
+                tessdata_text = str(tessdata) if tessdata.exists() else "chưa tìm thấy tessdata cạnh tesseract.exe"
+                message = f"Tesseract dự phòng: Đã cài • {version_line} • đường dẫn {path} • tessdata {tessdata_text}"
+            except Exception as exc:
+                message = f"Tesseract dự phòng: tìm thấy tại {path} nhưng không đọc được phiên bản ({exc})."
+            self.event_queue.put(("tesseract_status", message))
+
+        threading.Thread(target=worker, name="check_vehicle_tesseract_status", daemon=True).start()
+
     def _notify(self, message: str, level: str = "info") -> None:
         self.ui_state.notify(message, level)
         self.notification_var.set(message)
 
     def _update_header_status(self) -> None:
         engine = self.engine_var.get()
-        if engine == "GPT Vision":
-            model = self.gpt_model_var.get().strip() or DEFAULT_GPT_MODEL
-        elif engine == "Gemini Vision":
-            model = self.gemini_model_var.get().strip() or DEFAULT_GEMINI_MODEL
-        elif engine == "OpenAI Compatible":
-            model = self.custom_model_var.get().strip() or "chưa chọn model"
-        else:
-            model = "local" if engine in {"PaddleOCR Local", "Local OCR"} else "API"
-        self.header_status_var.set(f"{engine} • {model} • {self.status_var.get()}")
+        labels = {
+            "PaddleOCR Local": "OCR cục bộ — PaddleOCR",
+            HYBRID_ENGINE_MODE: "OCR cục bộ + AI kiểm tra ảnh khó",
+            "OpenAI Compatible": "AI trực tuyến",
+            "Local OCR": "Tesseract dự phòng",
+            "GPT Vision": "AI trực tuyến",
+            "Gemini Vision": "AI trực tuyến",
+            "Plate Recognizer": "AI trực tuyến",
+        }
+        self.header_status_var.set(f"{labels.get(engine, 'Nhận diện biển số')} • {self.status_var.get()}")
 
     def _sync_local_ocr_control(self) -> None:
-        is_paddle = self.engine_var.get() == "PaddleOCR Local"
-        if is_paddle:
-            self.local_ocr_workers_var.set(1)
-            self.local_ocr_hint_var.set("PaddleOCR local chạy một inference worker để đảm bảo ổn định; image worker vẫn có thể song song.")
-        else:
-            self.local_ocr_hint_var.set("Local OCR dùng giới hạn worker local đã cấu hình.")
-        control = getattr(self, "local_ocr_workers_spin", None)
-        if control is not None:
-            control.configure(state="disabled" if is_paddle else "normal")
+        self.local_ocr_workers_var.set(1)
+        self.local_ocr_hint_var.set("PaddleOCR cục bộ dùng một lượt nhận diện để đảm bảo ổn định; xử lý ảnh vẫn có thể chạy song song.")
+        for control_name in ("local_ocr_workers_spin", "local_ocr_workers_advanced_spin"):
+            control = getattr(self, control_name, None)
+            if control is not None:
+                control.configure(state="disabled")
+        self._update_advanced_worker_summary()
 
     def save_detail_edits(self) -> None:
         self._save_detail_edits()
@@ -1351,7 +1696,7 @@ class CheckVehicleApp(tk.Tk):
     def add_manual_plate(self) -> None:
         result = self.current_detail_result
         if result is None:
-            messagebox.showwarning("Chưa chọn ảnh", "Chọn ảnh đã quét trước khi thêm biển số.", parent=self)
+            self._notify("Chọn một ảnh đã quét trước khi thêm biển số.", "warning")
             return
         self._save_detail_edits()
         result.plates.append(
@@ -1374,7 +1719,7 @@ class CheckVehicleApp(tk.Tk):
 
     def _export_results(self, reviewed: bool) -> None:
         if not self.results:
-            messagebox.showwarning("Chưa có dữ liệu", "Hãy quét ảnh trước khi xuất Excel.", parent=self)
+            self._notify("Hãy quét ảnh trước khi xuất Excel.", "warning")
             return
         if self.export_worker and self.export_worker.is_alive():
             return
@@ -1611,9 +1956,9 @@ class CheckVehicleApp(tk.Tk):
             elif self.review_tree.exists(review_id):
                 self.review_tree.delete(review_id)
 
-    def _image_row_values(self, path: Path, result: ImageResult | None) -> tuple[str, str, str, str, str, str, str]:
+    def _image_row_values(self, path: Path, result: ImageResult | None) -> tuple[str, str, str, str, str, str]:
         if result is None:
-            return ("Chờ quét", path.name, "", "", "", "", "")
+            return ("Chờ quét", path.name, "", "", "", "")
         plates = [plate.final_text for plate in result.plates if plate.final_text]
         first = result.plates[0] if result.plates else None
         plate_text = "; ".join(plates[:2])
@@ -1621,8 +1966,7 @@ class CheckVehicleApp(tk.Tk):
         raw = first.raw_text if first else ""
         confidence = f"{first.confidence:.0f}%" if first else ""
         review = "Cần review" if self._is_review_result(result) else "Không"
-        source = first.source if first else ""
-        return (status, path.name, raw, plate_text, confidence, review, source)
+        return (status, path.name, raw, plate_text, confidence, review)
 
     @staticmethod
     def _is_review_result(result: ImageResult | None) -> bool:
@@ -1649,6 +1993,7 @@ class CheckVehicleApp(tk.Tk):
 
     def _filtered_sorted_images(self) -> list[Path]:
         query = self.session_search_var.get().strip().casefold()
+        result_filter = self.result_filter_var.get().strip()
 
         def searchable(path: Path) -> str:
             result = self._result_for_path(path)
@@ -1659,7 +2004,16 @@ class CheckVehicleApp(tk.Tk):
                     values.extend([plate.final_text, plate.raw_text, plate.source])
             return " ".join(values).casefold()
 
-        paths = [path for path in self.images if not query or query in searchable(path)]
+        paths = []
+        for path in self.images:
+            result = self._result_for_path(path)
+            if query and query not in searchable(path):
+                continue
+            if result_filter == "Cần kiểm tra" and not self._is_review_result(result):
+                continue
+            if result_filter == "Có lỗi" and (result is None or result.status != "ERROR"):
+                continue
+            paths.append(path)
 
         def sort_key(path: Path):
             result = self._result_for_path(path)
@@ -1702,6 +2056,7 @@ class CheckVehicleApp(tk.Tk):
             self._render_detail(self._result_for_path(path), fallback_path=path)
 
     def _select_path(self, path: Path) -> None:
+        self.selected_image_path = path
         item_id = _image_iid(path)
         if hasattr(self, "image_tree") and self.image_tree.exists(item_id):
             self.image_tree.selection_set(item_id)
@@ -1712,6 +2067,7 @@ class CheckVehicleApp(tk.Tk):
             self.review_tree.selection_set(review_id)
             self.review_tree.focus(review_id)
             self.review_tree.see(review_id)
+        self._render_detail(self._result_for_path(path), fallback_path=path)
 
     def _render_detail(self, result: ImageResult | None, fallback_path: Path | None = None) -> None:
         path = result.image_path if result else fallback_path
@@ -1790,7 +2146,7 @@ class CheckVehicleApp(tk.Tk):
             self.detail_row_vars.append((plate, text_var, approved_var))
             ttk.Checkbutton(self.plates_frame, variable=approved_var).grid(row=row_index, column=0, sticky="n", padx=(0, 8), pady=4)
             ttk.Entry(self.plates_frame, textvariable=text_var, width=24).grid(row=row_index, column=1, sticky="ew", pady=4)
-            detail = f"Raw: {plate.raw_text or plate.text or '—'}\n{plate.confidence:.0f}% | {plate.source}"
+            detail = f"OCR thô: {plate.raw_text or plate.text or '—'}\nTin cậy: {plate.confidence:.0f}%"
             if plate.suggested_texts:
                 detail += f"\nGợi ý: {', '.join(plate.suggested_texts[:5])}"
             if plate.ambiguity_flags:
@@ -1916,7 +2272,11 @@ class CheckVehicleApp(tk.Tk):
         if hasattr(self, "start_button") and not (self.worker and self.worker.is_alive()):
             self.start_button.configure(state="normal" if self.images else "disabled")
         self._set_export_buttons_state("normal" if self.results and not (self.export_worker and self.export_worker.is_alive()) else "disabled")
+        view_results = getattr(self, "view_results_button", None)
+        if view_results is not None:
+            view_results.configure(state="normal" if self.results else "disabled")
         self._update_retry_button()
+        self._refresh_primary_action()
 
     def _update_retry_button(self) -> None:
         button = getattr(self, "retry_failed_button", None)
@@ -1932,7 +2292,7 @@ class CheckVehicleApp(tk.Tk):
             self.review_button.configure(state=state)
 
     def _set_export_buttons_state(self, state: str) -> None:
-        for button_name in ("export_button", "export_reviewed_button"):
+        for button_name in ("export_button", "export_reviewed_button", "scan_export_button"):
             button = getattr(self, button_name, None)
             if button is not None:
                 button.configure(state=state)
@@ -1979,11 +2339,13 @@ class CheckVehicleApp(tk.Tk):
     def _bind_settings(self) -> None:
         for variable in (
             self.engine_var,
+            self.recognition_mode_var,
             self.remember_key_var,
             self.gpt_model_var,
             self.gemini_model_var,
             self.plate_recognizer_region_var,
             self.tesseract_var,
+            self.tesseract_fallback_enabled_var,
             self.recursive_var,
             self.blur_threshold_var,
             self.conf_threshold_var,
@@ -1993,8 +2355,11 @@ class CheckVehicleApp(tk.Tk):
             self.local_ocr_workers_var,
             self.api_workers_var,
             self.queue_capacity_var,
+            self.performance_preset_var,
             self.paddle_scan_mode_var,
             self.embed_excel_images_var,
+            self.export_reviewed_only_var,
+            self.output_dir_var,
             self.dark_mode_var,
             self.custom_provider_enabled_var,
             self.custom_provider_name_var,
@@ -2012,6 +2377,8 @@ class CheckVehicleApp(tk.Tk):
             self.telegram_min_interval_var,
             self.telegram_mask_plate_var,
             self.update_manifest_url_var,
+            self.paddle_release_source_var,
+            self.model_manifest_url_var,
         ):
             variable.trace_add("write", lambda *_args: self._schedule_settings_save())
         for variable in (
@@ -2022,6 +2389,8 @@ class CheckVehicleApp(tk.Tk):
             self.telegram_bot_token_var,
         ):
             variable.trace_add("write", lambda *_args: self._on_api_key_changed())
+        for variable in (self.custom_provider_enabled_var, self.custom_base_url_var, self.custom_model_var):
+            variable.trace_add("write", lambda *_args: self._on_recognition_mode_changed())
         self.remember_key_var.trace_add("write", lambda *_args: self._update_key_status())
 
     def _on_api_key_changed(self) -> None:
@@ -2039,6 +2408,8 @@ class CheckVehicleApp(tk.Tk):
             self.remember_key_var.set(True)
         self._update_key_status()
         self._schedule_settings_save()
+        if self._settings_ready:
+            self._on_recognition_mode_changed()
 
     def _schedule_settings_save(self) -> None:
         if not self._settings_ready:
@@ -2050,15 +2421,17 @@ class CheckVehicleApp(tk.Tk):
     def _save_settings(self) -> None:
         self._save_after_id = None
         try:
-            output_dir = str(Path(self.output_var.get()).expanduser().parent)
+            output_dir = str(Path(self.output_dir_var.get() or _default_output_dir()).expanduser())
             payload = {
                 "version": SETTINGS_VERSION,
                 "engine": self.engine_var.get(),
+                "recognition_mode": self.recognition_mode_var.get().strip(),
                 "remember_key": bool(self.remember_key_var.get()),
                 "gpt_model": self.gpt_model_var.get().strip() or DEFAULT_GPT_MODEL,
                 "gemini_model": self.gemini_model_var.get().strip() or DEFAULT_GEMINI_MODEL,
                 "plate_recognizer_region": self.plate_recognizer_region_var.get().strip() or DEFAULT_PLATE_RECOGNIZER_REGION,
                 "tesseract_path": self.tesseract_var.get().strip(),
+                "tesseract_fallback_enabled": bool(self.tesseract_fallback_enabled_var.get()),
                 "recursive": bool(self.recursive_var.get()),
                 "blur_threshold": float(self.blur_threshold_var.get()),
                 "conf_threshold": float(self.conf_threshold_var.get()),
@@ -2068,8 +2441,10 @@ class CheckVehicleApp(tk.Tk):
                 "local_ocr_workers": self._safe_int_var(self.local_ocr_workers_var, 1),
                 "api_workers": self._safe_int_var(self.api_workers_var, 2),
                 "queue_capacity": self._safe_int_var(self.queue_capacity_var, 32),
+                "performance_preset": self._performance_preset_key(),
                 "paddle_scan_mode": self.paddle_scan_mode_var.get().strip() or PADDLE_SCAN_MODE_DEFAULT,
                 "embed_excel_images": bool(self.embed_excel_images_var.get()),
+                "export_reviewed_only": bool(self.export_reviewed_only_var.get()),
                 "dark_mode": bool(self.dark_mode_var.get()),
                 "output_dir": output_dir,
                 "provider_configs": {"custom_openai": self._custom_provider_snapshot()},
@@ -2084,7 +2459,13 @@ class CheckVehicleApp(tk.Tk):
                     "minimum_interval_seconds": self._safe_int_var(self.telegram_min_interval_var, 60),
                     "mask_plate_number": bool(self.telegram_mask_plate_var.get()),
                 },
-                "updates": {"manifest_url": self.update_manifest_url_var.get().strip(), "channel": "stable", "auto_install": False},
+                "updates": {
+                    "manifest_url": self.update_manifest_url_var.get().strip(),
+                    "paddle_release_source": self.paddle_release_source_var.get().strip(),
+                    "model_manifest_url": self.model_manifest_url_var.get().strip(),
+                    "channel": "stable",
+                    "auto_install": False,
+                },
             }
             save_settings(
                 payload,
@@ -2325,6 +2706,43 @@ class VisualReviewWindow(tk.Toplevel):
 def _default_output_dir() -> Path:
     docs = Path.home() / "Documents"
     return docs if docs.exists() else Path.home()
+
+
+def _recognition_mode_from_engine(engine: str) -> str:
+    if engine == HYBRID_ENGINE_MODE:
+        return "local_ai_review"
+    if engine in API_ENGINE_CHOICES:
+        return "online"
+    return "local"
+
+
+def _performance_preset_from_workers(settings: dict) -> str:
+    if not any(key in settings for key in ("image_workers", "worker_count", "api_workers")):
+        return "AUTO"
+    try:
+        image_workers = int(settings.get("image_workers") or settings.get("worker_count") or 0)
+        api_workers = int(settings.get("api_workers") or 0)
+    except (TypeError, ValueError):
+        return "AUTO"
+    if image_workers <= 1 and api_workers <= 1:
+        return "LOW_MEMORY"
+    if image_workers >= 3 or api_workers >= 3:
+        return "FAST"
+    return "AUTO"
+
+
+def _display_batch_status(status: str) -> str:
+    labels = {
+        "IDLE": "Sẵn sàng",
+        "PREPARING_MODEL": "Đang chuẩn bị",
+        "RUNNING": "Đang quét",
+        "STOPPING": "Đang dừng",
+        "COMPLETED": "Hoàn tất",
+        "COMPLETED_WITH_ERRORS": "Hoàn tất, cần kiểm tra",
+        "FAILED": "Có lỗi",
+        "CANCELLED": "Đã dừng",
+    }
+    return labels.get(status, "Đang xử lý")
 
 
 def _default_worker_count() -> int:

@@ -85,6 +85,7 @@ def main() -> int:
 
     # PaddleOCR remains guarded despite a manual request for four OCR workers.
     assert _measure("PaddleOCR Local", 4, 4, 4, 1) == 1
+    assert _measure("PaddleOCR + AI Review", 4, 4, 4, 1) == 1
     assert _measure("OpenAI Compatible", 4, 1, 3, 3) == 3
 
     manager = WorkerManager(WorkerSettings(mode="MANUAL", image_workers=2, local_ocr_workers=2, api_workers=1, queue_capacity=4), "Local OCR")

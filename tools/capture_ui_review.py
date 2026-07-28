@@ -115,7 +115,17 @@ def main() -> int:
     app.geometry("1366x768+20+20")
     try:
         app.show_page("scan")
-        capture(app, output_dir / "scan-empty.png")
+        capture(app, output_dir / "light-scan.png")
+        scan_page = app.shell.pages["scan"]
+        capture(app, output_dir / "advanced-collapsed.png")
+        scan_page._toggle_advanced()
+        capture(app, output_dir / "advanced-expanded.png")
+        scan_page._toggle_advanced()
+        app.dark_mode_var.set(True)
+        app._on_theme_toggle()
+        capture(app, output_dir / "dark-scan.png")
+        app.dark_mode_var.set(False)
+        app._on_theme_toggle()
         app._apply_progress_snapshot(
             {
                 "status": "RUNNING",
@@ -134,7 +144,6 @@ def main() -> int:
             },
             force=True,
         )
-        capture(app, output_dir / "scan-running.png")
 
         with tempfile.TemporaryDirectory() as temporary:
             image_path = Path(temporary) / "xe_mau.jpg"
@@ -184,14 +193,19 @@ def main() -> int:
                 force=True,
             )
             app.show_page("scan")
-            capture(app, output_dir / "scan-complete.png")
-            app.show_page("review")
+            app.show_page("results")
             app._select_path(image_path)
-            capture(app, output_dir / "result-review.png")
+            capture(app, output_dir / "light-results.png")
+            app.dark_mode_var.set(True)
+            app._on_theme_toggle()
+            capture(app, output_dir / "dark-results.png")
+            app.dark_mode_var.set(False)
+            app._on_theme_toggle()
 
-        for page, filename in (("providers", "providers.png"), ("telegram", "telegram.png"), ("updates", "updates.png"), ("settings", "settings.png")):
-            app.show_page(page)
-            capture(app, output_dir / filename)
+        app.show_settings_section("ai")
+        capture(app, output_dir / "settings-ai.png")
+        app.show_settings_section("updates")
+        capture(app, output_dir / "settings-updates.png")
     finally:
         app.destroy()
         temporary_appdata.cleanup()
