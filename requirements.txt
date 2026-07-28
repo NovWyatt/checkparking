@@ -1,0 +1,11 @@
+numpy>=1.26
+openai>=2.0
+opencv-python>=4.9
+openpyxl>=3.1
+open-image-models[onnx]==0.5.1
+paddleocr==3.5.0
+paddlepaddle==3.3.1
+pillow>=10.2
+pillow-heif>=0.15
+pytesseract>=0.3.10
+pyinstaller>=6.6

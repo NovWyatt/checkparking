@@ -1,0 +1,937 @@
+from __future__ import annotations
+
+import re
+import hashlib
+from pathlib import Path
+
+import cv2
+import numpy as np
+
+from .image_io import load_image, save_crop
+from .models import ImageResult, PlateCandidate
+from .ocr import TesseractOcrEngine, is_timestamp_like, looks_like_plate, plate_text_metadata
+from .plate_detector import detect_plate_candidates_onnx, onnx_detector_error
+
+
+def blur_score(image_bgr: np.ndarray) -> float:
+    gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
+    return float(cv2.Laplacian(gray, cv2.CV_64F).var())
+
+
+def detect_plate_candidates(image_bgr: np.ndarray, max_candidates: int = 12) -> list[PlateCandidate]:
+    original_height, original_width = image_bgr.shape[:2]
+    scale = min(1.0, 1600.0 / max(original_width, original_height))
+    if scale < 1.0:
+        resized = cv2.resize(image_bgr, (int(original_width * scale), int(original_height * scale)), interpolation=cv2.INTER_AREA)
+    else:
+        resized = image_bgr.copy()
+
+    gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(gray)
+    blurred = cv2.GaussianBlur(clahe, (5, 5), 0)
+    sobel_x = cv2.Sobel(blurred, cv2.CV_16S, 1, 0, ksize=3)
+    abs_sobel_x = cv2.convertScaleAbs(sobel_x)
+
+    kernel_width = max(25, int(resized.shape[1] / 45))
+    rect_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (kernel_width, 5))
+    closed = cv2.morphologyEx(abs_sobel_x, cv2.MORPH_CLOSE, rect_kernel)
+    _, thresh = cv2.threshold(closed, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_RECT, (5, 3)), iterations=1)
+    thresh = cv2.erode(thresh, None, iterations=1)
+    thresh = cv2.dilate(thresh, None, iterations=2)
+
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    candidates: list[PlateCandidate] = []
+    resized_area = resized.shape[0] * resized.shape[1]
+
+    for contour in contours:
+        x, y, w, h = cv2.boundingRect(contour)
+        if w < 50 or h < 15:
+            continue
+
+        aspect = w / max(h, 1)
+        area = w * h
+        area_ratio = area / max(resized_area, 1)
+        if _looks_like_timestamp_region(x, y, w, h, resized.shape[1], resized.shape[0], aspect, area_ratio):
+            continue
+        if not (1.4 <= aspect <= 6.8) or not (0.00025 <= area_ratio <= 0.18):
+            continue
+
+        contour_area = cv2.contourArea(contour)
+        rectangularity = contour_area / max(area, 1)
+        if rectangularity < 0.22:
+            continue
+
+        aspect_score = 1.0 - min(abs(aspect - 3.4) / 3.4, 1.0)
+        area_score = min(area_ratio / 0.02, 1.0)
+        vertical_score = 1.0 - abs((y + h / 2) / max(resized.shape[0], 1) - 0.58)
+        score = (aspect_score * 45) + (rectangularity * 25) + (area_score * 20) + (vertical_score * 10)
+
+        pad_x = int(w * 0.08)
+        pad_y = int(h * 0.22)
+        x1 = max(0, x - pad_x)
+        y1 = max(0, y - pad_y)
+        x2 = min(resized.shape[1], x + w + pad_x)
+        y2 = min(resized.shape[0], y + h + pad_y)
+
+        if scale < 1.0:
+            x1 = int(x1 / scale)
+            y1 = int(y1 / scale)
+            x2 = int(x2 / scale)
+            y2 = int(y2 / scale)
+
+        candidates.append(PlateCandidate(bbox=(x1, y1, max(1, x2 - x1), max(1, y2 - y1)), score=score, source="first_pass"))
+
+    return _non_max_suppression(sorted(candidates, key=lambda item: item.score, reverse=True), max_candidates)
+
+
+def detect_plate_candidates_second_pass(image_bgr: np.ndarray, max_candidates: int = 12) -> list[PlateCandidate]:
+    original_height, original_width = image_bgr.shape[:2]
+    scale = min(1.0, 1500.0 / max(original_width, original_height))
+    if scale < 1.0:
+        resized = cv2.resize(image_bgr, (int(original_width * scale), int(original_height * scale)), interpolation=cv2.INTER_AREA)
+    else:
+        resized = image_bgr.copy()
+
+    gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
+    gray = cv2.bilateralFilter(gray, 7, 45, 45)
+    blackhat = cv2.morphologyEx(gray, cv2.MORPH_BLACKHAT, cv2.getStructuringElement(cv2.MORPH_RECT, (31, 7)))
+    grad = cv2.Sobel(blackhat, cv2.CV_16S, 1, 0, ksize=3)
+    grad = cv2.convertScaleAbs(grad)
+    grad = cv2.GaussianBlur(grad, (5, 5), 0)
+    _, thresh = cv2.threshold(grad, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_RECT, (35, 7)), iterations=1)
+    thresh = cv2.dilate(thresh, None, iterations=1)
+
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    resized_area = resized.shape[0] * resized.shape[1]
+    candidates: list[PlateCandidate] = []
+    for contour in contours:
+        x, y, w, h = cv2.boundingRect(contour)
+        if w < 45 or h < 14:
+            continue
+
+        aspect = w / max(h, 1)
+        area = w * h
+        area_ratio = area / max(resized_area, 1)
+        if _looks_like_timestamp_region(x, y, w, h, resized.shape[1], resized.shape[0], aspect, area_ratio):
+            continue
+        if not (0.85 <= aspect <= 7.4) or not (0.0002 <= area_ratio <= 0.20):
+            continue
+
+        rectangularity = cv2.contourArea(contour) / max(area, 1)
+        if rectangularity < 0.16:
+            continue
+
+        pad_x = int(w * 0.10)
+        pad_y = int(h * 0.28)
+        x1 = max(0, x - pad_x)
+        y1 = max(0, y - pad_y)
+        x2 = min(resized.shape[1], x + w + pad_x)
+        y2 = min(resized.shape[0], y + h + pad_y)
+        if scale < 1.0:
+            x1 = int(x1 / scale)
+            y1 = int(y1 / scale)
+            x2 = int(x2 / scale)
+            y2 = int(y2 / scale)
+
+        target_aspect = 1.35 if aspect < 1.8 else 3.2
+        score = (rectangularity * 35) + ((1.0 - min(abs(aspect - target_aspect) / target_aspect, 1.0)) * 45) + 10
+        candidates.append(PlateCandidate(bbox=(x1, y1, max(1, x2 - x1), max(1, y2 - y1)), score=score, source="second_pass"))
+
+    return _non_max_suppression(sorted(candidates, key=lambda item: item.score, reverse=True), max_candidates)
+
+
+def detect_plate_outline_candidates(image_bgr: np.ndarray, max_candidates: int = 8) -> list[PlateCandidate]:
+    original_height, original_width = image_bgr.shape[:2]
+    scale = min(1.0, 1500.0 / max(original_width, original_height))
+    if scale < 1.0:
+        resized = cv2.resize(image_bgr, (int(original_width * scale), int(original_height * scale)), interpolation=cv2.INTER_AREA)
+    else:
+        resized = image_bgr.copy()
+
+    gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY)
+    gray = cv2.GaussianBlur(gray, (5, 5), 0)
+    edges = cv2.Canny(gray, 40, 140)
+    edges = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_RECT, (31, 9)), iterations=2)
+
+    contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    resized_area = resized.shape[0] * resized.shape[1]
+    candidates: list[PlateCandidate] = []
+    for contour in contours:
+        x, y, w, h = cv2.boundingRect(contour)
+        if w < 65 or h < 24:
+            continue
+
+        aspect = w / max(h, 1)
+        area_ratio = (w * h) / max(resized_area, 1)
+        if _looks_like_timestamp_region(x, y, w, h, resized.shape[1], resized.shape[0], aspect, area_ratio):
+            continue
+        if not (0.9 <= aspect <= 6.8) or not (0.00045 <= area_ratio <= 0.22):
+            continue
+
+        x1 = max(0, x - int(w * 0.05))
+        y1 = max(0, y - int(h * 0.12))
+        x2 = min(resized.shape[1], x + w + int(w * 0.05))
+        y2 = min(resized.shape[0], y + h + int(h * 0.12))
+        if scale < 1.0:
+            x1 = int(x1 / scale)
+            y1 = int(y1 / scale)
+            x2 = int(x2 / scale)
+            y2 = int(y2 / scale)
+
+        target_aspect = 1.35 if aspect < 1.8 else 3.3
+        score = 64 + (1.0 - min(abs(aspect - target_aspect) / target_aspect, 1.0)) * 30
+        candidates.append(PlateCandidate(bbox=(x1, y1, max(1, x2 - x1), max(1, y2 - y1)), score=score, source="outline_pass"))
+
+    return _non_max_suppression(sorted(candidates, key=lambda item: item.score, reverse=True), max_candidates)
+
+
+def fallback_candidates(image_bgr: np.ndarray) -> list[PlateCandidate]:
+    height, width = image_bgr.shape[:2]
+    rois = [
+        (int(width * 0.10), int(height * 0.22), int(width * 0.80), int(height * 0.50), 12.0, "fallback_center"),
+        (int(width * 0.08), int(height * 0.45), int(width * 0.84), int(height * 0.38), 10.0, "fallback_lower"),
+        (int(width * 0.04), int(height * 0.34), int(width * 0.46), int(height * 0.44), 8.0, "fallback_left"),
+        (int(width * 0.50), int(height * 0.34), int(width * 0.46), int(height * 0.44), 8.0, "fallback_right"),
+    ]
+    return [
+        PlateCandidate(bbox=(x, y, max(1, w), max(1, h)), score=score, source=source)
+        for x, y, w, h, score, source in rois
+        if w > 0 and h > 0
+    ]
+
+
+def process_image(
+    image_path: Path,
+    crop_dir: Path,
+    ocr_engine: TesseractOcrEngine,
+    blur_threshold: float = 80.0,
+    confidence_threshold: float = 40.0,
+    paddle_scan_mode: str = "balanced",
+) -> ImageResult:
+    try:
+        image_bgr, (width, height) = load_image(image_path)
+    except Exception as exc:
+        return ImageResult(image_path=image_path, status="ERROR", reason="Không đọc được file ảnh", error=str(exc))
+
+    sharpness = blur_score(image_bgr)
+    warnings: list[str] = []
+    if sharpness < blur_threshold:
+        warnings.append(f"Ảnh mờ, blur={sharpness:.1f} < {blur_threshold:.1f}")
+
+    region_reader = getattr(ocr_engine, "read_plate_regions", None)
+    can_read_regions = callable(region_reader)
+    batch_region_reader = getattr(ocr_engine, "read_plate_regions_batch", None)
+    fast_region_mode = can_read_regions and callable(batch_region_reader)
+    paddle_mode = _normalize_paddle_scan_mode(paddle_scan_mode)
+
+    if fast_region_mode:
+        detector_candidates = (
+            detect_plate_candidates_onnx(
+                image_bgr,
+                max_candidates=_onnx_detector_limit(paddle_mode),
+                confidence_threshold=_onnx_detector_confidence(paddle_mode),
+            )
+            if _should_run_initial_onnx_detector(paddle_mode)
+            else []
+        )
+        detector_error = onnx_detector_error()
+        if detector_error:
+            warnings.append(f"Không dùng được ONNX detector; tiếp tục OCR fallback: {detector_error}")
+        scene_candidates = [PlateCandidate(bbox=(0, 0, width, height), score=14.0, source="fallback_full_scene")]
+        fallback_pool = fallback_candidates(image_bgr)[:1]
+        if detector_candidates:
+            candidates = _non_max_suppression(
+                sorted([*detector_candidates, *fallback_pool, *scene_candidates], key=lambda item: item.score, reverse=True),
+                _onnx_detector_limit(paddle_mode) + 2,
+            )
+        else:
+            candidates = [*scene_candidates, *fallback_pool]
+        detected_count = len(candidates)
+    else:
+        detector_candidates = []
+        first_pass = detect_plate_candidates(image_bgr, max_candidates=10)
+        second_pass = detect_plate_candidates_second_pass(image_bgr, max_candidates=10)
+        outline_pass = detect_plate_outline_candidates(image_bgr, max_candidates=8)
+        detected_candidates = _non_max_suppression(
+            sorted([*first_pass, *second_pass, *outline_pass], key=lambda item: item.score, reverse=True),
+            16,
+        )
+        detected_count = len(detected_candidates)
+        scene_candidates = [PlateCandidate(bbox=(0, 0, width, height), score=6.0, source="fallback_full_scene")] if can_read_regions else []
+        candidates = _non_max_suppression(
+            sorted([*detected_candidates, *fallback_candidates(image_bgr), *scene_candidates], key=lambda item: item.score, reverse=True),
+            18,
+        )
+
+    readable: list[PlateCandidate] = []
+    uncertain: list[PlateCandidate] = []
+    seen_plates: set[str] = set()
+    best_failed: PlateCandidate | None = None
+
+    def record_attempt(candidate: PlateCandidate, attempt) -> bool:
+        nonlocal best_failed
+        candidate.text = attempt.text
+        cleaned_text, suggested_texts, ambiguity_flags, needs_review = plate_text_metadata(attempt.raw_text or attempt.text)
+        candidate.cleaned_text = attempt.cleaned_text or cleaned_text
+        candidate.normalized_text = attempt.normalized_text or candidate.cleaned_text
+        candidate.suggested_texts = list(attempt.suggested_texts or suggested_texts)
+        candidate.ambiguity_flags = list(attempt.ambiguity_flags or ambiguity_flags)
+        candidate.needs_review = bool(attempt.needs_review or needs_review)
+        candidate.confidence = attempt.confidence
+        candidate.raw_text = attempt.raw_text
+
+        if is_timestamp_like(candidate.raw_text) or is_timestamp_like(candidate.text) or is_timestamp_like(candidate.normalized_text):
+            candidate.reason = "Bỏ qua vì giống timestamp/time mark trên ảnh"
+            return False
+
+        if candidate.normalized_text and looks_like_plate(candidate.normalized_text) and candidate.confidence >= confidence_threshold:
+            overlapping_plate = _find_overlapping_plate_variant(candidate, readable)
+            if overlapping_plate is None:
+                overlapping_plate = _find_overlapping_plate_conflict(candidate, readable)
+            if overlapping_plate:
+                if _prefer_plate_candidate(candidate, overlapping_plate):
+                    overlapping_plate.readable = False
+                    readable.remove(overlapping_plate)
+                    seen_plates.discard(overlapping_plate.normalized_text)
+                else:
+                    return False
+            if candidate.normalized_text not in seen_plates:
+                candidate.readable = True
+                seen_plates.add(candidate.normalized_text)
+                readable.append(candidate)
+                return True
+            return False
+
+        candidate.reason = "OCR thấp tin cậy hoặc không ra biển số"
+        if best_failed is None or candidate.confidence > best_failed.confidence:
+            best_failed = candidate
+        if candidate.confidence >= 20 or candidate.text:
+            uncertain.append(candidate)
+            return True
+        return False
+
+    if can_read_regions and callable(batch_region_reader):
+        prepared_candidates: list[dict[str, object]] = []
+        def prepare_candidate(index: int, candidate: PlateCandidate, *, mask_timestamp: bool) -> dict[str, object] | None:
+            can_contain_multiple = _can_contain_multiple_plates(candidate.bbox, width, height, candidate.source)
+            x, y, w, h = candidate.bbox
+            crop = image_bgr[y : y + h, x : x + w]
+            if crop.size == 0:
+                return None
+            crop_for_ocr = _mask_timestamp_overlay(crop, candidate.bbox, width, height) if mask_timestamp and can_contain_multiple else crop
+            return {
+                "index": index,
+                "candidate": candidate,
+                "crop": crop_for_ocr,
+                "can_contain_multiple": can_contain_multiple,
+                "recorded_region": False,
+            }
+
+        for index, candidate in enumerate(candidates, start=1):
+            prepared = prepare_candidate(index, candidate, mask_timestamp=True)
+            if prepared is not None:
+                prepared_candidates.append(prepared)
+
+        def process_region_records(prepared: dict[str, object], region_records) -> None:
+            candidate = prepared["candidate"]
+            if paddle_mode != "thorough" and bool(prepared["can_contain_multiple"]) and readable:
+                return
+            if paddle_mode != "thorough" and bool(prepared["can_contain_multiple"]):
+                region_records = list(region_records or [])[:1]
+            crop_for_ocr = prepared["crop"]
+            index = int(prepared["index"])
+            x, y, _w, _h = candidate.bbox
+            for region_index, (local_bbox, attempt) in enumerate(region_records, start=1):
+                rx, ry, rw, rh = local_bbox
+                global_bbox = (x + rx, y + ry, max(1, rw), max(1, rh))
+                region_candidate = PlateCandidate(
+                    bbox=global_bbox,
+                    score=max(candidate.score, attempt.confidence),
+                    source=f"{candidate.source}:{attempt.preprocess or 'paddle_region'}",
+                )
+                crop_name = f"{_safe_stem(image_path.stem)}_{_path_hash(image_path)}_{index:02d}_{region_index:02d}_{_safe_stem(region_candidate.source)}.jpg"
+                region_candidate.crop_path = crop_dir / crop_name
+                region_crop = crop_for_ocr[max(0, ry) : max(0, ry) + max(1, rh), max(0, rx) : max(0, rx) + max(1, rw)]
+                if region_crop.size:
+                    save_crop(region_crop, region_candidate.crop_path)
+                if record_attempt(region_candidate, attempt):
+                    prepared["recorded_region"] = True
+
+        def run_region_batch(items: list[dict[str, object]], detector_limit_side_len: int | None = None, detector_limit_type: str | None = None) -> None:
+            if not items:
+                return
+            crops = [item["crop"] for item in items]
+            try:
+                batches = batch_region_reader(
+                    crops,
+                    detector_limit_side_len=detector_limit_side_len,
+                    detector_limit_type=detector_limit_type,
+                )
+            except TypeError:
+                batches = [region_reader(crop) for crop in crops]
+            for item, region_records in zip(items, batches or [], strict=False):
+                process_region_records(item, region_records)
+
+        small_candidates = [item for item in prepared_candidates if not bool(item["can_contain_multiple"])]
+        large_candidates = [item for item in prepared_candidates if bool(item["can_contain_multiple"])]
+        run_region_batch(small_candidates)
+        if _should_run_initial_large_regions(readable, detector_candidates, sharpness, blur_threshold, paddle_mode):
+            primary_large_candidates = large_candidates if paddle_mode == "thorough" else large_candidates[:1]
+            run_region_batch(primary_large_candidates, detector_limit_side_len=960, detector_limit_type="max")
+            if not readable and paddle_mode != "thorough":
+                run_region_batch(large_candidates[1:], detector_limit_side_len=960, detector_limit_type="max")
+
+        if _should_run_onnx_rescue(readable, uncertain, detector_candidates, sharpness, blur_threshold, paddle_mode):
+            onnx_offset = len(prepared_candidates) + 1
+            detector_candidates = detect_plate_candidates_onnx(
+                image_bgr,
+                max_candidates=_onnx_detector_limit(paddle_mode),
+                confidence_threshold=_onnx_detector_confidence(paddle_mode),
+            )
+            detector_error = onnx_detector_error()
+            if detector_error and not any("ONNX detector" in warning for warning in warnings):
+                warnings.append(f"Không dùng được ONNX detector; tiếp tục OCR fallback: {detector_error}")
+            onnx_prepared = [
+                prepared
+                for index, candidate in enumerate(detector_candidates, start=onnx_offset)
+                if (prepared := prepare_candidate(index, candidate, mask_timestamp=True)) is not None
+            ]
+            run_region_batch(onnx_prepared, detector_limit_side_len=704, detector_limit_type="max")
+
+        focus_rescue_ran = False
+        if fast_region_mode and _should_run_paddle_core_rescue(readable, uncertain, sharpness, blur_threshold, paddle_mode):
+            rescue_offset = len(prepared_candidates) + 1
+            rescue_core = _paddle_rescue_core_candidates(image_bgr, include_sides=paddle_mode == "thorough")
+            rescue_prepared = [
+                prepared
+                for index, candidate in enumerate(rescue_core, start=rescue_offset)
+                if (prepared := prepare_candidate(index, candidate, mask_timestamp=True)) is not None
+            ]
+            run_region_batch(rescue_prepared, detector_limit_side_len=960, detector_limit_type="max")
+
+            if _should_run_paddle_focus_rescue(readable, uncertain, sharpness, blur_threshold, paddle_mode):
+                focus_offset = rescue_offset + len(rescue_prepared)
+                focus_prepared = [
+                    prepared
+                    for index, candidate in enumerate(
+                        _paddle_focus_tile_candidates(width, height, thorough=paddle_mode == "thorough"),
+                        start=focus_offset,
+                    )
+                    if (prepared := prepare_candidate(index, candidate, mask_timestamp=True)) is not None
+                ]
+                focus_limit = 768 if paddle_mode in {"fast", "thorough"} else 704
+                run_region_batch(focus_prepared, detector_limit_side_len=focus_limit, detector_limit_type="max")
+                focus_rescue_ran = True
+
+        if (
+            fast_region_mode
+            and not focus_rescue_ran
+            and _should_run_paddle_focus_rescue(readable, uncertain, sharpness, blur_threshold, paddle_mode)
+        ):
+            focus_offset = len(prepared_candidates) + 1
+            focus_prepared = [
+                prepared
+                for index, candidate in enumerate(
+                    _paddle_focus_tile_candidates(width, height, thorough=paddle_mode == "thorough"),
+                    start=focus_offset,
+                )
+                if (prepared := prepare_candidate(index, candidate, mask_timestamp=True)) is not None
+            ]
+            focus_limit = 768 if paddle_mode == "thorough" else 704
+            run_region_batch(focus_prepared, detector_limit_side_len=focus_limit, detector_limit_type="max")
+
+        variant_reader = getattr(ocr_engine, "read_plate_variants", None)
+        single_fallback_budget = 2 if not readable else 1
+        for prepared in prepared_candidates:
+            if single_fallback_budget <= 0:
+                break
+            if bool(prepared["recorded_region"]) or bool(prepared["can_contain_multiple"]):
+                continue
+            candidate = prepared["candidate"]
+            if readable and any(_overlap_ratio(candidate.bbox, existing.bbox) > 0.45 for existing in readable):
+                continue
+            crop_for_ocr = prepared["crop"]
+            index = int(prepared["index"])
+            crop_name = f"{_safe_stem(image_path.stem)}_{_path_hash(image_path)}_{index:02d}_{_safe_stem(candidate.source)}.jpg"
+            candidate.crop_path = crop_dir / crop_name
+            save_crop(crop_for_ocr, candidate.crop_path)
+            if callable(variant_reader):
+                attempt = variant_reader(crop_for_ocr)
+            else:
+                attempt = ocr_engine.read_plate(crop_for_ocr)
+            record_attempt(candidate, attempt)
+            single_fallback_budget -= 1
+    else:
+        for index, candidate in enumerate(candidates, start=1):
+            can_contain_multiple = _can_contain_multiple_plates(candidate.bbox, width, height, candidate.source)
+            if readable and not can_contain_multiple and any(_overlap_ratio(candidate.bbox, existing.bbox) > 0.45 for existing in readable):
+                continue
+
+            x, y, w, h = candidate.bbox
+            crop = image_bgr[y : y + h, x : x + w]
+            if crop.size == 0:
+                continue
+
+            crop_for_ocr = _mask_timestamp_overlay(crop, candidate.bbox, width, height) if can_contain_multiple else crop
+
+            if can_read_regions:
+                region_records = region_reader(crop_for_ocr)
+                recorded_region = False
+                for region_index, (local_bbox, attempt) in enumerate(region_records, start=1):
+                    rx, ry, rw, rh = local_bbox
+                    global_bbox = (x + rx, y + ry, max(1, rw), max(1, rh))
+                    region_candidate = PlateCandidate(
+                        bbox=global_bbox,
+                        score=max(candidate.score, attempt.confidence),
+                        source=f"{candidate.source}:{attempt.preprocess or 'paddle_region'}",
+                    )
+                    crop_name = f"{_safe_stem(image_path.stem)}_{_path_hash(image_path)}_{index:02d}_{region_index:02d}_{_safe_stem(region_candidate.source)}.jpg"
+                    region_candidate.crop_path = crop_dir / crop_name
+                    region_crop = crop_for_ocr[max(0, ry) : max(0, ry) + max(1, rh), max(0, rx) : max(0, rx) + max(1, rw)]
+                    if region_crop.size:
+                        save_crop(region_crop, region_candidate.crop_path)
+                    if record_attempt(region_candidate, attempt):
+                        recorded_region = True
+                if recorded_region or can_contain_multiple:
+                    continue
+
+            crop_name = f"{_safe_stem(image_path.stem)}_{_path_hash(image_path)}_{index:02d}_{_safe_stem(candidate.source)}.jpg"
+            candidate.crop_path = crop_dir / crop_name
+            save_crop(crop_for_ocr, candidate.crop_path)
+
+            attempt = ocr_engine.read_plate(crop_for_ocr)
+            record_attempt(candidate, attempt)
+
+    readable = _filter_readable_plates(readable, width, height, paddle_mode)
+    if readable:
+        reason = "Đọc được biển số"
+        status = "OK"
+        if warnings:
+            reason += "; cần đối chiếu vì ảnh mờ"
+        review_plates = [*readable]
+        for candidate in sorted(uncertain, key=lambda item: item.confidence, reverse=True):
+            if len(review_plates) >= len(readable) + 3:
+                break
+            if all(_iou(candidate.bbox, existing.bbox) < 0.35 for existing in review_plates):
+                review_plates.append(candidate)
+        return ImageResult(
+            image_path=image_path,
+            status=status,
+            reason=reason,
+            blur_score=sharpness,
+            width=width,
+            height=height,
+            candidate_count=detected_count,
+            plates=review_plates,
+            warnings=warnings,
+        )
+
+    if sharpness < blur_threshold:
+        status = "BLURRY"
+        reason = "Ảnh mờ và không đọc được biển số"
+    elif detected_count == 0:
+        status = "UNREADABLE"
+        reason = "Không tìm thấy vùng nghi biển số"
+    else:
+        status = "UNREADABLE"
+        reason = "Có vùng nghi biển số nhưng OCR không đủ tin cậy"
+
+    plates = sorted(uncertain, key=lambda item: item.confidence, reverse=True)[:3]
+    if not plates and best_failed:
+        plates = [best_failed]
+    return ImageResult(
+        image_path=image_path,
+        status=status,
+        reason=reason,
+        blur_score=sharpness,
+        width=width,
+        height=height,
+        candidate_count=detected_count,
+        plates=plates,
+        warnings=warnings,
+    )
+
+
+def _safe_stem(value: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_.-]+", "_", value).strip("._") or "image"
+
+
+def _path_hash(path: Path) -> str:
+    return hashlib.sha1(str(path.resolve()).encode("utf-8", errors="ignore")).hexdigest()[:8]
+
+
+def _looks_like_timestamp_region(x: int, y: int, w: int, h: int, image_width: int, image_height: int, aspect: float, area_ratio: float) -> bool:
+    center_x = x + (w / 2)
+    center_y = y + (h / 2)
+    in_corner_x = center_x < image_width * 0.34 or center_x > image_width * 0.66
+    in_timestamp_band = center_y < image_height * 0.20 or center_y > image_height * 0.78
+    is_small_text = h < image_height * 0.065 and area_ratio < 0.025
+    is_date_like_shape = aspect > 4.2 and area_ratio < 0.035
+    return in_corner_x and in_timestamp_band and (is_small_text or is_date_like_shape)
+
+
+def _can_contain_multiple_plates(bbox: tuple[int, int, int, int], image_width: int, image_height: int, source: str) -> bool:
+    _x, _y, w, h = bbox
+    area_ratio = (w * h) / max(1, image_width * image_height)
+    return source.startswith("fallback") or area_ratio >= 0.08
+
+
+def _normalize_paddle_scan_mode(value: str) -> str:
+    text = str(value or "").strip().casefold()
+    if text in {"fast", "nhanh"}:
+        return "fast"
+    if text in {"thorough", "careful", "deep", "ky", "kỹ", "quet ky", "quét kỹ"}:
+        return "thorough"
+    return "balanced"
+
+
+def _onnx_detector_limit(scan_mode: str) -> int:
+    if scan_mode == "fast":
+        return 5
+    if scan_mode == "thorough":
+        return 12
+    return 8
+
+
+def _onnx_detector_confidence(scan_mode: str) -> float:
+    if scan_mode == "fast":
+        return 0.30
+    if scan_mode == "thorough":
+        return 0.20
+    return 0.25
+
+
+def _should_run_initial_onnx_detector(scan_mode: str) -> bool:
+    return scan_mode == "thorough"
+
+
+def _should_run_onnx_rescue(
+    readable: list[PlateCandidate],
+    uncertain: list[PlateCandidate],
+    detector_candidates: list[PlateCandidate],
+    sharpness: float,
+    blur_threshold: float,
+    scan_mode: str,
+) -> bool:
+    if detector_candidates or scan_mode == "fast":
+        return False
+    if scan_mode == "thorough":
+        return True
+    if readable:
+        return False
+    if not _sharp_enough_for_extra_paddle_pass(sharpness, blur_threshold):
+        return False
+    return len(uncertain) >= 1
+
+
+def _should_run_initial_large_regions(
+    readable: list[PlateCandidate],
+    detector_candidates: list[PlateCandidate],
+    sharpness: float,
+    blur_threshold: float,
+    scan_mode: str,
+) -> bool:
+    if not detector_candidates:
+        return True
+    if scan_mode == "thorough":
+        return True
+    if not readable:
+        return True
+    if scan_mode == "fast":
+        return False
+    expected_from_detector = min(2, len(detector_candidates))
+    return len(readable) < expected_from_detector and _sharp_enough_for_extra_paddle_pass(sharpness, blur_threshold)
+
+
+def _sharp_enough_for_extra_paddle_pass(sharpness: float, blur_threshold: float) -> bool:
+    return sharpness >= max(42.0, blur_threshold * 0.52)
+
+
+def _should_run_paddle_core_rescue(
+    readable: list[PlateCandidate],
+    uncertain: list[PlateCandidate],
+    sharpness: float,
+    blur_threshold: float,
+    scan_mode: str,
+) -> bool:
+    if not readable:
+        return True
+    if scan_mode == "fast":
+        return False
+    if scan_mode == "thorough":
+        return False
+    if scan_mode != "thorough":
+        return False
+    if not _sharp_enough_for_extra_paddle_pass(sharpness, blur_threshold):
+        return False
+    return len(readable) < 4
+
+
+def _should_run_paddle_focus_rescue(
+    readable: list[PlateCandidate],
+    uncertain: list[PlateCandidate],
+    sharpness: float,
+    blur_threshold: float,
+    scan_mode: str,
+) -> bool:
+    if scan_mode == "fast":
+        return not readable
+    if not _sharp_enough_for_extra_paddle_pass(sharpness, blur_threshold):
+        return False
+    if scan_mode == "thorough":
+        return not readable
+    if not readable:
+        return True
+    return False
+
+
+def _filter_readable_plates(
+    plates: list[PlateCandidate],
+    image_width: int,
+    image_height: int,
+    scan_mode: str,
+) -> list[PlateCandidate]:
+    if len(plates) <= 1:
+        return plates
+
+    candidates: list[PlateCandidate] = []
+    for plate in plates:
+        if not _looks_like_overlay_ocr_plate(plate, image_width, image_height):
+            candidates.append(plate)
+        else:
+            plate.readable = False
+
+    if len(candidates) <= 1:
+        return candidates
+
+    ordered = sorted(candidates, key=lambda item: item.confidence, reverse=True)
+    best = ordered[0]
+    filtered = [best]
+    for plate in ordered[1:]:
+        if any(_overlap_ratio(plate.bbox, kept.bbox) >= 0.55 or _iou(plate.bbox, kept.bbox) >= 0.35 for kept in filtered):
+            plate.readable = False
+            continue
+        if _same_plate_variant(plate.normalized_text, best.normalized_text) or _plate_texts_are_close(plate.normalized_text, best.normalized_text):
+            plate.readable = False
+            continue
+        if scan_mode == "thorough" and _looks_like_rescue_noise(plate, best, image_width, image_height):
+            plate.readable = False
+            continue
+        filtered.append(plate)
+
+    return sorted(filtered, key=lambda item: plates.index(item))
+
+
+def _looks_like_overlay_ocr_plate(plate: PlateCandidate, image_width: int, image_height: int) -> bool:
+    x, y, w, h = plate.bbox
+    area_ratio = (w * h) / max(1, image_width * image_height)
+    aspect = w / max(1, h)
+    if _looks_like_timestamp_region(x, y, w, h, image_width, image_height, aspect, area_ratio):
+        return True
+
+    center_y = y + h / 2
+    if center_y > image_height * 0.76 and area_ratio < 0.09:
+        return True
+
+    center_x = x + w / 2
+    if center_x > image_width * 0.82 and h > w * 1.35:
+        return True
+
+    return False
+
+
+def _looks_like_rescue_noise(
+    plate: PlateCandidate,
+    best: PlateCandidate,
+    image_width: int,
+    image_height: int,
+) -> bool:
+    noisy_source = any(token in plate.source for token in ("fallback_full_scene", "rescue_full", "rescue_focus_tile", "unmasked"))
+    if not noisy_source:
+        return False
+
+    if plate.confidence <= best.confidence - 8.0:
+        return True
+
+    x, y, w, h = plate.bbox
+    area_ratio = (w * h) / max(1, image_width * image_height)
+    aspect = w / max(1, h)
+    if area_ratio < 0.001 or area_ratio > 0.12:
+        return True
+    if not (0.75 <= aspect <= 7.0):
+        return True
+
+    bx, by, bw, bh = best.bbox
+    center_distance = abs((x + w / 2) - (bx + bw / 2)) + abs((y + h / 2) - (by + bh / 2))
+    if center_distance < max(image_width, image_height) * 0.10:
+        return True
+
+    return False
+
+
+def _paddle_rescue_core_candidates(image_bgr: np.ndarray, *, include_sides: bool = False) -> list[PlateCandidate]:
+    height, width = image_bgr.shape[:2]
+    broad = fallback_candidates(image_bgr)
+    rescue = [PlateCandidate(bbox=(0, 0, width, height), score=9.0, source="rescue_full_unmasked")]
+    limit = 4 if include_sides else 2
+    for candidate in broad[:limit]:
+        rescue.append(PlateCandidate(bbox=candidate.bbox, score=candidate.score, source=f"rescue_{candidate.source}_unmasked"))
+    return rescue
+
+
+def _paddle_focus_tile_candidates(image_width: int, image_height: int, *, thorough: bool = False) -> list[PlateCandidate]:
+    tile_width = int(image_width * 0.38)
+    tile_height = int(image_height * 0.34)
+    candidates: list[PlateCandidate] = []
+    y_fractions = (0.16, 0.38, 0.56) if thorough else (0.16, 0.38)
+    for y_fraction in y_fractions:
+        for x_fraction in (0.04, 0.31, 0.58):
+            x = min(max(0, int(image_width * x_fraction)), max(0, image_width - tile_width))
+            y = min(max(0, int(image_height * y_fraction)), max(0, image_height - tile_height))
+            candidates.append(
+                PlateCandidate(
+                    bbox=(x, y, max(1, tile_width), max(1, tile_height)),
+                    score=7.0,
+                    source="rescue_focus_tile",
+                )
+            )
+    return candidates
+
+
+def _find_overlapping_plate_variant(candidate: PlateCandidate, existing_plates: list[PlateCandidate]) -> PlateCandidate | None:
+    for existing in existing_plates:
+        if not _same_plate_variant(candidate.normalized_text, existing.normalized_text):
+            continue
+        if _overlap_ratio(candidate.bbox, existing.bbox) >= 0.25 or _iou(candidate.bbox, existing.bbox) >= 0.18:
+            return existing
+    return None
+
+
+def _find_overlapping_plate_conflict(candidate: PlateCandidate, existing_plates: list[PlateCandidate]) -> PlateCandidate | None:
+    for existing in existing_plates:
+        if _overlap_ratio(candidate.bbox, existing.bbox) < 0.35 and _iou(candidate.bbox, existing.bbox) < 0.20:
+            continue
+        if _plate_texts_are_close(candidate.normalized_text, existing.normalized_text):
+            return existing
+    return None
+
+
+def _same_plate_variant(a: str, b: str) -> bool:
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    shorter, longer = sorted((a, b), key=len)
+    return len(shorter) >= 6 and shorter in longer
+
+
+def _plate_texts_are_close(a: str, b: str) -> bool:
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    if len(a) < 6 or len(b) < 6:
+        return False
+    if a[:2] != b[:2]:
+        return False
+    max_distance = 1 if max(len(a), len(b)) <= 7 else 2
+    return _bounded_edit_distance(a, b, max_distance) <= max_distance
+
+
+def _bounded_edit_distance(a: str, b: str, max_distance: int) -> int:
+    if abs(len(a) - len(b)) > max_distance:
+        return max_distance + 1
+    previous = list(range(len(b) + 1))
+    for i, char_a in enumerate(a, start=1):
+        current = [i]
+        row_min = i
+        for j, char_b in enumerate(b, start=1):
+            cost = 0 if char_a == char_b else 1
+            value = min(previous[j] + 1, current[j - 1] + 1, previous[j - 1] + cost)
+            current.append(value)
+            row_min = min(row_min, value)
+        if row_min > max_distance:
+            return max_distance + 1
+        previous = current
+    return previous[-1]
+
+
+def _prefer_plate_candidate(candidate: PlateCandidate, existing: PlateCandidate) -> bool:
+    length_gain = len(candidate.normalized_text) - len(existing.normalized_text)
+    if length_gain >= 2:
+        return True
+    if length_gain <= -2:
+        return False
+    return candidate.confidence > existing.confidence + 3.0
+
+
+def _mask_timestamp_overlay(crop_bgr: np.ndarray, bbox: tuple[int, int, int, int], image_width: int, image_height: int) -> np.ndarray:
+    if crop_bgr.size == 0:
+        return crop_bgr
+
+    masked = crop_bgr.copy()
+    overlay_regions = [
+        (0, int(image_height * 0.76), int(image_width * 0.58), int(image_height * 0.24)),
+        (int(image_width * 0.58), int(image_height * 0.76), int(image_width * 0.42), int(image_height * 0.24)),
+        (0, 0, int(image_width * 0.55), int(image_height * 0.16)),
+        (int(image_width * 0.45), 0, int(image_width * 0.55), int(image_height * 0.16)),
+    ]
+
+    x, y, w, h = bbox
+    fill_color = tuple(int(value) for value in np.median(masked.reshape(-1, 3), axis=0))
+    for ox, oy, ow, oh in overlay_regions:
+        ix1 = max(x, ox)
+        iy1 = max(y, oy)
+        ix2 = min(x + w, ox + ow)
+        iy2 = min(y + h, oy + oh)
+        if ix2 <= ix1 or iy2 <= iy1:
+            continue
+        local_x1 = max(0, ix1 - x)
+        local_y1 = max(0, iy1 - y)
+        local_x2 = min(w, ix2 - x)
+        local_y2 = min(h, iy2 - y)
+        if local_x2 > local_x1 and local_y2 > local_y1:
+            cv2.rectangle(masked, (local_x1, local_y1), (local_x2, local_y2), fill_color, thickness=-1)
+    return masked
+
+
+def _non_max_suppression(candidates: list[PlateCandidate], limit: int) -> list[PlateCandidate]:
+    selected: list[PlateCandidate] = []
+    for candidate in candidates:
+        if all(_iou(candidate.bbox, existing.bbox) < 0.35 for existing in selected):
+            selected.append(candidate)
+            if len(selected) >= limit:
+                break
+    return selected
+
+
+def _iou(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> float:
+    ax, ay, aw, ah = a
+    bx, by, bw, bh = b
+    ax2, ay2 = ax + aw, ay + ah
+    bx2, by2 = bx + bw, by + bh
+
+    inter_x1 = max(ax, bx)
+    inter_y1 = max(ay, by)
+    inter_x2 = min(ax2, bx2)
+    inter_y2 = min(ay2, by2)
+    inter_area = max(0, inter_x2 - inter_x1) * max(0, inter_y2 - inter_y1)
+    union_area = aw * ah + bw * bh - inter_area
+    return inter_area / union_area if union_area else 0.0
+
+
+def _overlap_ratio(a: tuple[int, int, int, int], b: tuple[int, int, int, int]) -> float:
+    ax, ay, aw, ah = a
+    bx, by, bw, bh = b
+    ax2, ay2 = ax + aw, ay + ah
+    bx2, by2 = bx + bw, by + bh
+
+    inter_x1 = max(ax, bx)
+    inter_y1 = max(ay, by)
+    inter_x2 = min(ax2, bx2)
+    inter_y2 = min(ay2, by2)
+    inter_area = max(0, inter_x2 - inter_x1) * max(0, inter_y2 - inter_y1)
+    smaller_area = max(1, min(aw * ah, bw * bh))
+    return inter_area / smaller_area

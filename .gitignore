@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Local settings and secrets
+.env
+.env.*
+!.env.example
+
+# Build artifacts
+build/
+dist/
+release/
+release_fast/
+installer/Output/
+vendor/
+*.log
+
+# OCR/debug outputs
+tmp_crops_debug/
+output/
+outputs/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
