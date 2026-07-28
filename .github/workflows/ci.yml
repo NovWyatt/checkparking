@@ -32,21 +32,16 @@ jobs:
           .\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
       - name: Compile source
         run: .\.venv\Scripts\python.exe -B -m compileall -q check_vehicle_ocr tests tools main.py
-      - name: Data, worker and stability tests
-        run: |
-          $tests = @(
-            'tests\dataset_benchmark_test.py', 'tests\performance_stability_test.py',
-            'tests\progress_state_test.py', 'tests\services_test.py',
-            'tests\worker_manager_test.py'
-          )
-          foreach ($test in $tests) {
-            Write-Host "RUN $test"
-            .\.venv\Scripts\python.exe -B $test
-            if ($LASTEXITCODE -ne 0) {
-              Write-Error "FAILED $test with exit code $LASTEXITCODE"
-              exit $LASTEXITCODE
-            }
-          }
+      - name: Dataset benchmark test
+        run: .\.venv\Scripts\python.exe -B tests\dataset_benchmark_test.py
+      - name: Performance stability test
+        run: .\.venv\Scripts\python.exe -B tests\performance_stability_test.py
+      - name: Progress-state test
+        run: .\.venv\Scripts\python.exe -B tests\progress_state_test.py
+      - name: Services test
+        run: .\.venv\Scripts\python.exe -B tests\services_test.py
+      - name: Worker-manager test
+        run: .\.venv\Scripts\python.exe -B tests\worker_manager_test.py
       - name: Provider, notification and updater tests
         run: |
           $tests = @(
