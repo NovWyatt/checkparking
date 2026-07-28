@@ -45,4 +45,11 @@ jobs:
             'tests\updater_ui_state_test.py', 'tests\worker_manager_test.py',
             'tests\release_system_test.py'
           )
-          foreach ($test in $tests) { .\.venv\Scripts\python.exe -B $test; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } }
+          foreach ($test in $tests) {
+            Write-Host "RUN $test"
+            .\.venv\Scripts\python.exe -B $test
+            if ($LASTEXITCODE -ne 0) {
+              Write-Error "FAILED $test with exit code $LASTEXITCODE"
+              exit $LASTEXITCODE
+            }
+          }

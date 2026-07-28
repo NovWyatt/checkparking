@@ -98,3 +98,18 @@ Paddle có cảnh báo không có `ccache` và Windows in một dòng `Could not
 - Chưa có nguồn model OCR production đã ký/checksum nên staging model thật chưa chạy.
 - Không kiểm thử Telegram, custom provider hay update download với credential/dịch vụ thật.
 - Build workflow có thể bị giới hạn bởi thời gian/tài nguyên runner GitHub do PaddleOCR; release chỉ được xác nhận sau khi workflow của tag kết thúc.
+
+## 13. Trạng thái release cuối cùng (bổ sung sau khi chạy workflow)
+
+Thông tin dưới đây là trạng thái cuối và thay thế câu “chưa có GitHub Release”
+ở phần trước.
+
+- Commit nền tảng release: `17f8c652ebc7f8ed4ee9aa265b73b2d419b2fc65`.
+- Commit sửa workflow tạo `.venv` trước quality gate: `64ecc81d931f6937f197e425a15e33130b8972a4`.
+- Commit phát hành cuối: `6df2d29e15d5489c95ea01f35970babeb8c6b501`.
+- Tag/release đầu tiên: `v1.7.0`. Lần workflow đầu thất bại trước build do chưa tạo `.venv`; nguyên nhân đã được sửa, tag được tạo lại khi chưa có Release, và workflow sau đó thành công.
+- Tag/release cuối: [`v1.7.1`](https://github.com/NovWyatt/checkparking/releases/tag/v1.7.1), trỏ đến commit phát hành cuối. Nó sửa việc executable mới tự chọn GitHub Releases của chính repository ở profile mới, nhưng không ghi đè lựa chọn tắt cập nhật của người dùng.
+- Workflow release `v1.7.1`: `30381309759`, hoàn tất **success** với đầy đủ bước dependency, quality gate, PyInstaller/Inno Setup, checksum và upload release.
+- GitHub Release `v1.7.1` công khai, không draft/prerelease, có đủ `setup.exe`, portable ZIP, manifest và `SHA256SUMS.txt`.
+- Updater service đã dùng GitHub API public để chọn setup asset, đọc checksum từ `SHA256SUMS.txt` và tải/xác minh thật `CheckVehicleOCR-1.7.1-windows-x64-setup.exe` (181,888,324 bytes, SHA-256 `783b63a2c0e1e2b006914fb6265629040cffc49556358898ad57e87ac844b9f0`). Package chỉ được tải vào `audit-output`; không tự cài đè runtime chính.
+- CI cho `main` và release workflow đều được tạo. Release workflow là căn cứ xác nhận assets GitHub; package local chỉ là bằng chứng smoke trước publish.
