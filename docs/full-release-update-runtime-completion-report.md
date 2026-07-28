@@ -113,3 +113,18 @@ Thông tin dưới đây là trạng thái cuối và thay thế câu “chưa c
 - GitHub Release `v1.7.1` công khai, không draft/prerelease, có đủ `setup.exe`, portable ZIP, manifest và `SHA256SUMS.txt`.
 - Updater service đã dùng GitHub API public để chọn setup asset, đọc checksum từ `SHA256SUMS.txt` và tải/xác minh thật `CheckVehicleOCR-1.7.1-windows-x64-setup.exe` (181,888,324 bytes, SHA-256 `783b63a2c0e1e2b006914fb6265629040cffc49556358898ad57e87ac844b9f0`). Package chỉ được tải vào `audit-output`; không tự cài đè runtime chính.
 - CI cho `main` và release workflow đều được tạo. Release workflow là căn cứ xác nhận assets GitHub; package local chỉ là bằng chứng smoke trước publish.
+
+## 14. Patch release cuối cùng — v1.7.2
+
+Sau khi `v1.7.1` đã phát hành, CI Windows khoanh vùng một lỗi thực tế trong
+`TelegramNotifier`: trên máy mới boot, `time.monotonic()` có thể nhỏ hơn
+`minimum_interval_seconds`, khiến tin **đầu tiên** bị coi là đã rate-limit.
+
+- Sửa bằng trạng thái `last_sent_at = None`; limiter chỉ áp dụng sau khi có lần gửi thành công đầu tiên.
+- `tests/services_test.py` cố định mốc monotonic thấp để kiểm chứng lỗi này trên mọi runner.
+- Commit phát hành cuối: `e8d8210e511deedc3ec5eb7e437dd36adf91e816`.
+- Tag/release cuối: [`v1.7.2`](https://github.com/NovWyatt/checkparking/releases/tag/v1.7.2), public, không draft/prerelease.
+- CI `main` run `30383673931`: **success**; từng nhóm data/stability, services/Telegram, provider/updater và UI đều pass.
+- Release workflow `30383676751`: **success**; build, installer, checksum và upload assets đều pass.
+- Updater service đã kiểm tra và tải thật asset setup của `v1.7.2` bằng GitHub credential đã có của Git (không log token): 181,886,261 bytes, SHA-256 `8705d3b838dbf23ac3aa9e91d3f8f513edaba112758d8cb149ebea9b8389b23c`.
+- Vẫn không tự cài package vừa tải lên runtime chính. Installer smoke local đã dùng build 1.7.0; workflow GitHub xác nhận installer 1.7.2 được build/upload thành công.
