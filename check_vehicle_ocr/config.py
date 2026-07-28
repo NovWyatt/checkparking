@@ -4,12 +4,14 @@ import base64
 import json
 import os
 import sys
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
 
 APP_DIR_NAME = "CheckVehicleOCR"
 SETTINGS_FILE = "settings.json"
+SETTINGS_VERSION = 11
 
 
 def settings_path() -> Path:
@@ -32,6 +34,8 @@ def load_settings() -> dict[str, Any]:
     if not isinstance(data, dict):
         return {}
 
+    data = migrate_settings(data)
+
     protected_fields = {
         "api_key": "api_key_dpapi",
         "gemini_api_key": "gemini_api_key_dpapi",
@@ -40,7 +44,27 @@ def load_settings() -> dict[str, Any]:
     for plain_name, protected_name in protected_fields.items():
         encrypted_key = str(data.get(protected_name) or "")
         data[plain_name] = _unprotect_text(encrypted_key) if encrypted_key else ""
+    _restore_nested_secrets(data)
     return data
+
+
+def migrate_settings(data: dict[str, Any]) -> dict[str, Any]:
+    """Add safe defaults without discarding existing user settings."""
+    migrated = dict(data)
+    migrated.setdefault("version", SETTINGS_VERSION)
+    migrated.setdefault("worker_mode", "AUTO")
+    migrated.setdefault("image_workers", 0)
+    migrated.setdefault("local_ocr_workers", 1)
+    migrated.setdefault("api_workers", 2)
+    migrated.setdefault("queue_capacity", 32)
+    migrated.setdefault("provider_configs", {})
+    if not isinstance(migrated["provider_configs"], dict):
+        migrated["provider_configs"] = {}
+    migrated.setdefault("telegram", {})
+    if not isinstance(migrated["telegram"], dict):
+        migrated["telegram"] = {}
+    migrated.setdefault("updates", {"manifest_url": "", "channel": "stable", "auto_install": False})
+    return migrated
 
 
 def save_settings(
@@ -48,12 +72,14 @@ def save_settings(
     api_key: str = "",
     gemini_api_key: str = "",
     plate_recognizer_token: str = "",
+    provider_api_keys: dict[str, str] | None = None,
+    telegram_bot_token: str = "",
 ) -> Path:
     path = settings_path()
     path.parent.mkdir(parents=True, exist_ok=True)
 
     plain_key_names = {"api_key", "gemini_api_key", "plate_recognizer_token"}
-    payload = {key: value for key, value in data.items() if key not in plain_key_names}
+    payload = deepcopy({key: value for key, value in data.items() if key not in plain_key_names})
     protected_values = {
         "api_key_dpapi": api_key.strip(),
         "gemini_api_key_dpapi": gemini_api_key.strip(),
@@ -65,6 +91,13 @@ def save_settings(
         else:
             payload.pop(protected_name, None)
 
+    _protect_nested_secrets(
+        payload,
+        provider_api_keys or {},
+        telegram_bot_token,
+        remember=bool(payload.get("remember_key")),
+    )
+
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     return path
 
@@ -72,7 +105,50 @@ def save_settings(
 def clear_saved_api_key() -> None:
     data = load_settings()
     data["remember_key"] = False
-    save_settings(data, api_key="", gemini_api_key="", plate_recognizer_token="")
+    save_settings(data, api_key="", gemini_api_key="", plate_recognizer_token="", provider_api_keys={}, telegram_bot_token="")
+
+
+def _restore_nested_secrets(data: dict[str, Any]) -> None:
+    providers = data.get("provider_configs")
+    if isinstance(providers, dict):
+        for value in providers.values():
+            if not isinstance(value, dict):
+                continue
+            encrypted = str(value.get("api_key_dpapi") or "")
+            value["api_key"] = _unprotect_text(encrypted) if encrypted else ""
+
+    telegram = data.get("telegram")
+    if isinstance(telegram, dict):
+        encrypted = str(telegram.get("bot_token_dpapi") or "")
+        telegram["bot_token"] = _unprotect_text(encrypted) if encrypted else ""
+
+
+def _protect_nested_secrets(
+    payload: dict[str, Any],
+    provider_api_keys: dict[str, str],
+    telegram_bot_token: str,
+    *,
+    remember: bool,
+) -> None:
+    providers = payload.get("provider_configs")
+    if isinstance(providers, dict):
+        for name, value in providers.items():
+            if not isinstance(value, dict):
+                continue
+            value.pop("api_key", None)
+            secret = str(provider_api_keys.get(str(name), "") or "").strip()
+            if remember and secret:
+                value["api_key_dpapi"] = _protect_text(secret)
+            else:
+                value.pop("api_key_dpapi", None)
+
+    telegram = payload.get("telegram")
+    if isinstance(telegram, dict):
+        telegram.pop("bot_token", None)
+        if remember and telegram_bot_token.strip():
+            telegram["bot_token_dpapi"] = _protect_text(telegram_bot_token.strip())
+        else:
+            telegram.pop("bot_token_dpapi", None)
 
 
 def _protect_text(value: str) -> str:

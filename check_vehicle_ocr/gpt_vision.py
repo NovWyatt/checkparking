@@ -102,10 +102,22 @@ GPT_RESPONSE_FORMAT = {
 
 
 class GptVisionEngine:
-    def __init__(self, api_key: str | None = None, model: str | None = None, timeout: float = 60.0):
+    def __init__(
+        self,
+        api_key: str | None = None,
+        model: str | None = None,
+        timeout: float = 60.0,
+        base_url: str | None = None,
+        api_mode: str = "responses",
+        cached_api_mode: str = "",
+    ):
         self.api_key = (api_key or os.environ.get("OPENAI_API_KEY") or "").strip()
         self.model = (model or DEFAULT_GPT_MODEL).strip()
         self.timeout = timeout
+        self.base_url = (base_url or "").strip().rstrip("/")
+        self.api_mode = _normalize_api_mode(api_mode)
+        self.cached_api_mode = _normalize_cached_api_mode(cached_api_mode)
+        self.last_api_mode = ""
         self.reason = ""
         self.last_model_used = self.model
 
@@ -118,7 +130,10 @@ class GptVisionEngine:
             self.reason = "Chưa có OPENAI_API_KEY."
             return
 
-        self.client = OpenAI(api_key=self.api_key, timeout=timeout)
+        client_kwargs = {"api_key": self.api_key, "timeout": timeout}
+        if self.base_url:
+            client_kwargs["base_url"] = self.base_url
+        self.client = OpenAI(**client_kwargs)
 
     @property
     def available(self) -> bool:
@@ -153,12 +168,12 @@ class GptVisionEngine:
             return ImageResult(
                 image_path=image_path,
                 status="ERROR",
-                reason="GPT Vision lỗi khi phân tích ảnh",
+                reason=_provider_error_reason(exc),
                 blur_score=sharpness,
                 width=width,
                 height=height,
                 warnings=warnings,
-                error=str(exc),
+                error=_redact_error(str(exc), self.api_key),
             )
 
         if payload.get("image_blurry"):
@@ -223,32 +238,89 @@ class GptVisionEngine:
         )
 
     def _call_model(self, image_path: Path, image_bgr) -> dict[str, Any]:
-        content: list[dict[str, Any]] = [{"type": "input_text", "text": GPT_PLATE_PROMPT}]
-        content.append({"type": "input_image", "image_url": _bgr_image_to_data_url(image_bgr), "detail": "high"})
-        for data_url in _candidate_crop_data_urls(image_bgr):
-            content.append({"type": "input_image", "image_url": data_url, "detail": "high"})
+        data_urls = [_bgr_image_to_data_url(image_bgr), *_candidate_crop_data_urls(image_bgr)]
+        response_content: list[dict[str, Any]] = [{"type": "input_text", "text": GPT_PLATE_PROMPT}]
+        response_content.extend({"type": "input_image", "image_url": data_url, "detail": "high"} for data_url in data_urls)
+        chat_content: list[dict[str, Any]] = [{"type": "text", "text": GPT_PLATE_PROMPT}]
+        chat_content.extend({"type": "image_url", "image_url": {"url": data_url, "detail": "high"}} for data_url in data_urls)
 
         last_error: Exception | None = None
         for model_name in self._model_retry_order():
             self.last_model_used = model_name
-            for attempt in range(3):
+            modes = self._api_mode_order()
+            unsupported_endpoints = 0
+            for mode in modes:
                 try:
-                    response = self._create_response(model_name, content, use_schema=True)
-                    return _parse_json_response(response.output_text)
+                    payload = self._request_mode(model_name, mode, response_content, chat_content)
                 except Exception as exc:
                     last_error = exc
-                    if _should_retry_without_schema(exc):
-                        response = self._create_response(model_name, content, use_schema=False)
-                        return _parse_json_response(response.output_text)
+                    if _is_auth_error(exc):
+                        raise
+                    if self.api_mode == "auto" and _is_endpoint_unsupported(exc):
+                        unsupported_endpoints += 1
+                        continue
                     if _is_model_access_error(exc):
                         break
-                    if not _is_transient_error(exc) or attempt >= 2:
-                        raise
-                    time.sleep(1.2 * (attempt + 1))
+                    raise
+                else:
+                    self.last_api_mode = mode
+                    self.cached_api_mode = mode
+                    return payload
+            if self.api_mode == "auto" and unsupported_endpoints == len(modes) and last_error:
+                # A model retry cannot repair a provider that has neither
+                # inference endpoint; avoid multiplying requests by models.
+                raise last_error
 
         if last_error:
             raise last_error
         raise RuntimeError("GPT Vision không có model khả dụng.")
+
+    def _api_mode_order(self) -> list[str]:
+        if self.api_mode != "auto":
+            return [self.api_mode]
+        preferred = self.cached_api_mode or "responses"
+        alternate = "chat_completions" if preferred == "responses" else "responses"
+        return [preferred, alternate]
+
+    def _request_mode(
+        self,
+        model_name: str,
+        mode: str,
+        response_content: list[dict[str, Any]],
+        chat_content: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        for attempt in range(3):
+            try:
+                if mode == "responses":
+                    return self._request_responses(model_name, response_content)
+                return self._request_chat_completions(model_name, chat_content)
+            except Exception as exc:
+                if mode == "responses" and _should_retry_without_schema(exc):
+                    response = self._create_response(model_name, response_content, use_schema=False)
+                    return _parse_json_response(response.output_text)
+                if _is_auth_error(exc) or _is_endpoint_unsupported(exc) or not _is_transient_error(exc) or attempt >= 2:
+                    raise
+                time.sleep(1.2 * (attempt + 1))
+        raise RuntimeError("Không thể gọi provider.")
+
+    def _request_responses(self, model_name: str, content: list[dict[str, Any]]) -> dict[str, Any]:
+        response = self._create_response(model_name, content, use_schema=True)
+        return _parse_json_response(response.output_text)
+
+    def _request_chat_completions(self, model_name: str, content: list[dict[str, Any]]) -> dict[str, Any]:
+        response = self.client.chat.completions.create(
+            model=model_name,
+            messages=[{"role": "user", "content": content}],
+            max_tokens=900,
+        )
+        choices = getattr(response, "choices", None) or []
+        if not choices:
+            raise ValueError("Chat Completions không trả choice.")
+        message = getattr(choices[0], "message", None)
+        text = getattr(message, "content", None) if message is not None else None
+        if not isinstance(text, str) or not text.strip():
+            raise ValueError("Chat Completions không trả nội dung JSON.")
+        return _parse_json_response(text)
 
     def _create_response(self, model_name: str, content: list[dict[str, Any]], use_schema: bool):
         kwargs: dict[str, Any] = {
@@ -385,6 +457,45 @@ def _is_model_access_error(exc: Exception) -> bool:
 def _is_transient_error(exc: Exception) -> bool:
     message = str(exc).lower()
     return any(word in message for word in ("rate limit", "429", "timeout", "temporarily", "server error", "503", "502", "500"))
+
+
+def _is_auth_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return any(word in message for word in ("401", "403", "unauthorized", "forbidden", "invalid api key", "authentication"))
+
+
+def _is_endpoint_unsupported(exc: Exception) -> bool:
+    message = str(exc).lower()
+    status = "404" in message or "405" in message or "not found" in message or "method not allowed" in message
+    endpoint_words = ("responses", "chat/completions", "chat_completions", "endpoint", "route", "method")
+    return status and any(word in message for word in endpoint_words)
+
+
+def _normalize_api_mode(value: str | None) -> str:
+    cleaned = str(value or "").strip().lower()
+    return cleaned if cleaned in {"auto", "responses", "chat_completions"} else "auto"
+
+
+def _normalize_cached_api_mode(value: str | None) -> str:
+    cleaned = str(value or "").strip().lower()
+    return cleaned if cleaned in {"responses", "chat_completions"} else ""
+
+
+def _redact_error(message: str, secret: str) -> str:
+    return message.replace(secret, "[đã ẩn]") if secret else message
+
+
+def _provider_error_reason(exc: Exception) -> str:
+    if _is_auth_error(exc):
+        return "Provider từ chối xác thực (401/403)"
+    if _is_endpoint_unsupported(exc):
+        return "Provider không hỗ trợ API mode đã chọn"
+    message = str(exc).lower()
+    if "429" in message or "rate limit" in message:
+        return "Provider đang giới hạn tốc độ (429)"
+    if "timeout" in message or "timed out" in message:
+        return "Provider hết thời gian chờ"
+    return "GPT Vision lỗi khi phân tích ảnh"
 
 
 def _parse_json_response(text: str) -> dict[str, Any]:

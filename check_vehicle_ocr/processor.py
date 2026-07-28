@@ -209,11 +209,19 @@ def process_image(
     blur_threshold: float = 80.0,
     confidence_threshold: float = 40.0,
     paddle_scan_mode: str = "balanced",
+    image_bgr: np.ndarray | None = None,
+    image_size: tuple[int, int] | None = None,
 ) -> ImageResult:
-    try:
-        image_bgr, (width, height) = load_image(image_path)
-    except Exception as exc:
-        return ImageResult(image_path=image_path, status="ERROR", reason="Không đọc được file ảnh", error=str(exc))
+    if image_bgr is None:
+        try:
+            image_bgr, (width, height) = load_image(image_path)
+        except Exception as exc:
+            return ImageResult(image_path=image_path, status="ERROR", reason="Không đọc được file ảnh", error=str(exc))
+    else:
+        if image_size is None:
+            height, width = image_bgr.shape[:2]
+        else:
+            width, height = image_size
 
     sharpness = blur_score(image_bgr)
     warnings: list[str] = []

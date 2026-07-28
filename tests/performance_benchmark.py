@@ -68,8 +68,17 @@ def _single_run() -> dict[str, float | int]:
     from check_vehicle_ocr.processor import process_image
 
     import_seconds = time.perf_counter() - import_started
-    ui_seconds, app = _measure(CheckVehicleApp)
-    app.destroy()
+    previous_appdata = os.environ.get("APPDATA")
+    with tempfile.TemporaryDirectory(prefix="check_vehicle_benchmark_appdata_") as appdata:
+        os.environ["APPDATA"] = appdata
+        try:
+            ui_seconds, app = _measure(CheckVehicleApp)
+            app.destroy()
+        finally:
+            if previous_appdata is None:
+                os.environ.pop("APPDATA", None)
+            else:
+                os.environ["APPDATA"] = previous_appdata
 
     with tempfile.TemporaryDirectory(prefix="check_vehicle_benchmark_") as temporary:
         root = Path(temporary)
