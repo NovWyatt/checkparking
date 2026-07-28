@@ -26,6 +26,12 @@ jobs:
           cache-dependency-path: requirements-build.txt
       - name: Install Inno Setup
         run: choco install innosetup --no-progress -y
+      - name: Install isolated build and test dependencies
+        shell: pwsh
+        run: |
+          python -m venv .venv
+          .\.venv\Scripts\python.exe -m pip install --upgrade pip
+          .\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt -r requirements-build.txt
       - name: Compile and run release-system checks
         shell: pwsh
         run: |
@@ -35,7 +41,7 @@ jobs:
       - name: Build portable executable and installer
         shell: pwsh
         run: |
-          .\build_exe.ps1 -SkipModelWarmup
+          .\build_exe.ps1 -SkipInstall -SkipModelWarmup
           .\build_installer.ps1 -SkipExeBuild
           .\build_release_assets.ps1 -SkipBuild
       - name: Verify release asset checksums
