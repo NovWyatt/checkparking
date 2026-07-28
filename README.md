@@ -53,6 +53,30 @@ pip install -r requirements.txt
 python main.py
 ```
 
+## Development va release Windows
+
+Release version duoc quan ly tai `check_vehicle_ocr/version.py`. Tao moi truong
+doc lap va chay source bang:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt -r requirements-build.txt
+.\.venv\Scripts\python.exe -s -B tests\ui_smoke_test.py
+.\.venv\Scripts\python.exe -s main.py
+```
+
+Tao Windows executable, installer va release assets da co SHA-256:
+
+```powershell
+.\build_exe.ps1
+.\build_installer.ps1 -SkipExeBuild
+.\build_release_assets.ps1 -SkipBuild
+```
+
+Chi release asset trong `release-assets\` duoc upload: installer Windows x64,
+portable ZIP, manifest va `SHA256SUMS.txt`. Khong upload settings, token,
+anh/output nguoi dung, `.venv`, `.runtime` hay audit output.
+
 ## OCR engine
 
 Mac dinh nen dung `PaddleOCR Local` neu muon quet mien phi va khong phu thuoc quota. Engine nay chay local nen khong can API key; lan dau co the tai model PaddleOCR vao cache cua Windows user.

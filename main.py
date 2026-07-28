@@ -40,6 +40,19 @@ def _launch_active_runtime_if_needed() -> None:
         return
 
 
+def _recover_interrupted_app_update() -> None:
+    """Best-effort recovery of an interrupted installer helper before GUI use."""
+    try:
+        from check_vehicle_ocr.config import settings_path
+        from check_vehicle_ocr.updater import recover_pending_installer_update
+
+        recover_pending_installer_update(settings_path().parent / "updates" / "pending-installer-update.json")
+    except Exception:
+        # The updater helper owns detailed diagnostics.  Startup must retain a
+        # working base runtime even when its prior state cannot be read.
+        pass
+
+
 def _run_paddle_self_test() -> int:
     from PIL import Image, ImageDraw, ImageFont
 
@@ -83,6 +96,17 @@ def _run_paddle_self_test() -> int:
         return 10
 
 
+def _run_runtime_health_check() -> int:
+    """Non-GUI health check used by the updater after runtime activation."""
+    try:
+        from check_vehicle_ocr.paddle_ocr_engine import PaddleOcrEngine
+
+        engine = PaddleOcrEngine(confidence_threshold=20)
+        return 0 if engine.available else 2
+    except Exception:
+        return 10
+
+
 def _write_self_test_log(message: str) -> None:
     log_path = Path(tempfile.gettempdir()) / "CheckVehicleOCR_paddle_self_test.log"
     try:
@@ -92,7 +116,10 @@ def _write_self_test_log(message: str) -> None:
 
 
 def main() -> None:
+    _recover_interrupted_app_update()
     _launch_active_runtime_if_needed()
+    if "--runtime-health-check" in sys.argv:
+        raise SystemExit(_run_runtime_health_check())
     if "--self-test-paddle" in sys.argv:
         raise SystemExit(_run_paddle_self_test())
 

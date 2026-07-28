@@ -3,6 +3,8 @@ __pycache__/
 *.py[cod]
 .venv/
 venv/
+.runtime/
+check_vehicle_ocr/_build_meta.py
 
 # Local settings and secrets
 .env
@@ -15,8 +17,15 @@ dist/
 release/
 release_fast/
 installer/Output/
+release-assets/
 vendor/
 *.log
+audit-output/
+
+# Real packaged-UI review evidence is documentation, not a build directory.
+!docs/ui-review/release/
+!docs/ui-review/release/*.png
+docs/ui-review/release/packaged-*-settings.png
 
 # OCR/debug outputs
 tmp_crops_debug/

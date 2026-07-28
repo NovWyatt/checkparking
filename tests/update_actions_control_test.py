@@ -18,7 +18,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from check_vehicle_ocr.app import CheckVehicleApp
-from check_vehicle_ocr.config import APP_DIR_NAME, SETTINGS_FILE, migrate_settings
+from check_vehicle_ocr.config import APP_DIR_NAME, SETTINGS_FILE, load_settings, migrate_settings, save_settings
 from check_vehicle_ocr.runtime_manager import PaddleRuntimeManager
 from check_vehicle_ocr.ui.theme import TOKENS
 from check_vehicle_ocr.update_center import parse_tesseract_manifest, select_tesseract_executable, stage_tesseract_archive
@@ -62,6 +62,9 @@ def _test_config_and_isolation() -> None:
     assert known_test["updates"]["manifest_url"] == ""
     real_file = migrate_settings({"updates": {"manifest_url": "file:///D:/operator/release.json"}})
     assert real_file["updates"]["manifest_url"] == "file:///D:/operator/release.json"
+    legacy_token = migrate_settings({"remember_key": True, "updates": {"github_token": "private-token"}})
+    assert "github_token" not in legacy_token["updates"]
+    assert "private-token" not in json.dumps(legacy_token)
 
     production_path = _production_settings_path()
     before = production_path.read_bytes() if production_path.exists() else None
@@ -78,6 +81,13 @@ def _test_config_and_isolation() -> None:
             payload = json.loads((Path(isolated) / APP_DIR_NAME / SETTINGS_FILE).read_text(encoding="utf-8"))
             assert payload["updates"]["manifest_url"] == ""
             assert payload["updates"]["source_mode"] == "disabled"
+            save_settings(
+                {"remember_key": True, "updates": {"source_mode": "github", "github_repository": "owner/private"}},
+                github_token="private-token",
+            )
+            raw = (Path(isolated) / APP_DIR_NAME / SETTINGS_FILE).read_text(encoding="utf-8")
+            assert "private-token" not in raw
+            assert load_settings()["updates"]["github_token"] == "private-token"
         finally:
             app.destroy()
     if old_appdata is None:

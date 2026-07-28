@@ -32,6 +32,9 @@ def collect_dynamic_libs_optional(package_name):
 
 binaries += collect_dynamic_libs_optional("onnxruntime")
 datas = collect_data_files("paddlex") + collect_data_files("paddleocr")
+model_manifest = project_root / "models" / "manifest.json"
+if model_manifest.is_file():
+    datas.append((str(model_manifest), "models"))
 for model_name in paddleocr_model_names:
     model_dir = Path.home() / ".paddlex" / "official_models" / model_name
     if model_dir.exists():

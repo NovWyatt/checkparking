@@ -1,5 +1,7 @@
 #define MyAppName "Check Vehicle OCR"
-#define MyAppVersion "1.6.12"
+#ifndef MyAppVersion
+  #define MyAppVersion "0.0.0-dev"
+#endif
 #define MyAppPublisher "Check Vehicle"
 #define MyAppExeName "CheckVehicleOCR.exe"
 #ifndef SourceDir
@@ -15,7 +17,7 @@ DefaultDirName={autopf}\CheckVehicleOCR
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 OutputDir=Output
-OutputBaseFilename=CheckVehicleOCR_Setup
+OutputBaseFilename=CheckVehicleOCR-{#MyAppVersion}-windows-x64-setup
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern

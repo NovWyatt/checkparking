@@ -11,7 +11,7 @@ from typing import Any
 
 APP_DIR_NAME = "CheckVehicleOCR"
 SETTINGS_FILE = "settings.json"
-SETTINGS_VERSION = 14
+SETTINGS_VERSION = 15
 
 # These values were used only by early UI tests.  They must never behave as a
 # release source in a real operator profile.  Keep this exact, small list: a
@@ -105,6 +105,13 @@ def migrate_settings(data: dict[str, Any]) -> dict[str, Any]:
     if removed_test_manifest and updates["source_mode"] == "manifest":
         updates["source_mode"] = "disabled"
     updates.setdefault("github_repository", "")
+    updates.setdefault("github_token_dpapi", "")
+    # A short-lived development build could have written this optional token
+    # without protection.  Preserve it by migrating into DPAPI/plain64 rather
+    # than leaving a secret in settings.json.
+    legacy_github_token = str(updates.pop("github_token", "") or "").strip()
+    if legacy_github_token and not str(updates.get("github_token_dpapi") or ""):
+        updates["github_token_dpapi"] = _protect_text(legacy_github_token)
     updates.setdefault("paddle_release_source", "https://pypi.org/pypi/paddleocr/json")
     updates.setdefault("paddle_candidate_version", "")
     updates.setdefault("model_manifest_url", "")
@@ -149,6 +156,7 @@ def save_settings(
     plate_recognizer_token: str = "",
     provider_api_keys: dict[str, str] | None = None,
     telegram_bot_token: str = "",
+    github_token: str = "",
 ) -> Path:
     path = settings_path()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -170,6 +178,7 @@ def save_settings(
         payload,
         provider_api_keys or {},
         telegram_bot_token,
+        github_token,
         remember=bool(payload.get("remember_key")),
     )
 
@@ -180,7 +189,7 @@ def save_settings(
 def clear_saved_api_key() -> None:
     data = load_settings()
     data["remember_key"] = False
-    save_settings(data, api_key="", gemini_api_key="", plate_recognizer_token="", provider_api_keys={}, telegram_bot_token="")
+    save_settings(data, api_key="", gemini_api_key="", plate_recognizer_token="", provider_api_keys={}, telegram_bot_token="", github_token="")
 
 
 def _restore_nested_secrets(data: dict[str, Any]) -> None:
@@ -197,11 +206,17 @@ def _restore_nested_secrets(data: dict[str, Any]) -> None:
         encrypted = str(telegram.get("bot_token_dpapi") or "")
         telegram["bot_token"] = _unprotect_text(encrypted) if encrypted else ""
 
+    updates = data.get("updates")
+    if isinstance(updates, dict):
+        encrypted = str(updates.get("github_token_dpapi") or "")
+        updates["github_token"] = _unprotect_text(encrypted) if encrypted else ""
+
 
 def _protect_nested_secrets(
     payload: dict[str, Any],
     provider_api_keys: dict[str, str],
     telegram_bot_token: str,
+    github_token: str,
     *,
     remember: bool,
 ) -> None:
@@ -224,6 +239,14 @@ def _protect_nested_secrets(
             telegram["bot_token_dpapi"] = _protect_text(telegram_bot_token.strip())
         else:
             telegram.pop("bot_token_dpapi", None)
+
+    updates = payload.get("updates")
+    if isinstance(updates, dict):
+        updates.pop("github_token", None)
+        if remember and github_token.strip():
+            updates["github_token_dpapi"] = _protect_text(github_token.strip())
+        else:
+            updates.pop("github_token_dpapi", None)
 
 
 def _protect_text(value: str) -> str:

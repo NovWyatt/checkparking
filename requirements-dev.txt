@@ -1,0 +1,5 @@
+-r requirements.txt
+
+# The test suite is script-based today; pytest is included for new tests and
+# local development convenience, not required by the production application.
+pytest==8.4.2

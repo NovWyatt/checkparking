@@ -146,25 +146,42 @@ def _get_ocr():
             return _PADDLE_OCR
         try:
             bundled_model_dirs = _bundled_model_dirs()
-            _PADDLE_OCR = PaddleOCR(
-                text_detection_model_name=_TEXT_DETECTION_MODEL_NAME,
-                text_detection_model_dir=bundled_model_dirs.get(_TEXT_DETECTION_MODEL_NAME),
-                text_recognition_model_name=_TEXT_RECOGNITION_MODEL_NAME,
-                text_recognition_model_dir=bundled_model_dirs.get(_TEXT_RECOGNITION_MODEL_NAME),
-                use_doc_orientation_classify=False,
-                use_doc_unwarping=False,
-                use_textline_orientation=False,
-                text_det_limit_side_len=768,
-                text_det_limit_type="min",
-                text_rec_score_thresh=0.1,
-            )
+            _PADDLE_OCR = _create_ocr(bundled_model_dirs)
         except Exception as exc:
+            # A selected staged model is never allowed to brick local OCR.
+            # Roll it back atomically and try the bundled/cache models once.
+            # This guard runs only during initialization, before a shared OCR
+            # instance is exposed to worker threads.
+            if _has_active_staged_model():
+                try:
+                    from .model_registry import ModelRuntimeManager
+
+                    ModelRuntimeManager().rollback()
+                    _PADDLE_OCR = _create_ocr(_bundled_model_dirs(include_active=False))
+                    return _PADDLE_OCR
+                except Exception:
+                    pass
             _PADDLE_INIT_ERROR = str(exc)
             raise
     return _PADDLE_OCR
 
 
-def _bundled_model_dirs() -> dict[str, str]:
+def _create_ocr(model_dirs: dict[str, str]):
+    return PaddleOCR(
+        text_detection_model_name=_TEXT_DETECTION_MODEL_NAME,
+        text_detection_model_dir=model_dirs.get(_TEXT_DETECTION_MODEL_NAME),
+        text_recognition_model_name=_TEXT_RECOGNITION_MODEL_NAME,
+        text_recognition_model_dir=model_dirs.get(_TEXT_RECOGNITION_MODEL_NAME),
+        use_doc_orientation_classify=False,
+        use_doc_unwarping=False,
+        use_textline_orientation=False,
+        text_det_limit_side_len=768,
+        text_det_limit_type="min",
+        text_rec_score_thresh=0.1,
+    )
+
+
+def _bundled_model_dirs(*, include_active: bool = True) -> dict[str, str]:
     roots = []
     frozen_root = getattr(sys, "_MEIPASS", None)
     if frozen_root:
@@ -173,6 +190,13 @@ def _bundled_model_dirs() -> dict[str, str]:
     roots.append(Path.home() / ".paddlex")
 
     found: dict[str, str] = {}
+    if include_active:
+        try:
+            from .model_registry import active_model_dirs
+
+            found.update(active_model_dirs())
+        except Exception:
+            pass
     for root in roots:
         official_models = root / "models" / "paddleocr"
         if not official_models.exists():
@@ -184,6 +208,15 @@ def _bundled_model_dirs() -> dict[str, str]:
             if _is_valid_paddle_model_dir(model_dir):
                 found[model_name] = str(model_dir)
     return found
+
+
+def _has_active_staged_model() -> bool:
+    try:
+        from .model_registry import active_model_dirs
+
+        return bool(active_model_dirs())
+    except Exception:
+        return False
 
 
 def _is_valid_paddle_model_dir(model_dir: Path) -> bool:

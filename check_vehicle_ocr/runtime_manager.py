@@ -66,8 +66,11 @@ class PaddleRuntimeManager:
                 "opencv-python>=4.9",
                 "openpyxl>=3.1",
                 "pillow>=10.2",
+                "pillow-heif>=0.15",
                 "pytesseract>=0.3.10",
                 "openai>=2.0",
+                "packaging>=23.2",
+                "open-image-models[onnx]==0.5.1",
             ),
             (str(python_path), "-c", "import paddle, paddleocr; print(paddle.__version__, paddleocr.__version__)"),
             (str(python_path), str(self.project_root / "main.py"), "--self-test-paddle"),
@@ -91,18 +94,26 @@ class PaddleRuntimeManager:
         an interrupted or previously failed attempt is inspectable.
         """
         plan = self.build_plan(version, paddlepaddle_version)
+        commands = plan.commands
         if plan.stage_dir.exists():
-            return RuntimeStagingReport(plan.version, plan.stage_dir, False, "Thư mục thử nghiệm đã tồn tại; không ghi đè lần thử trước.", ())
+            previous = _read_json(plan.stage_dir / "acceptance.json")
+            if previous.get("passed"):
+                return RuntimeStagingReport(plan.version, plan.stage_dir, False, "Bản thử nghiệm đã đạt trước đó; không ghi đè acceptance hiện có.", ())
+            # A failed stage keeps its venv for diagnosis.  Retrying the
+            # validation steps after a project-side fix is safe and avoids
+            # reinstalling or deleting the failed candidate.
+            commands = plan.commands[3:]
         plan.stage_dir.parent.mkdir(parents=True, exist_ok=True)
         executed: list[tuple[str, ...]] = []
         env = {
             **os.environ,
+            "PYTHONPATH": str(self.project_root) + (os.pathsep + os.environ["PYTHONPATH"] if os.environ.get("PYTHONPATH") else ""),
             "PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK": "True",
             "CHECK_VEHICLE_DISABLE_ONNX_DETECTOR": "1",
             "PIP_DISABLE_PIP_VERSION_CHECK": "1",
         }
         try:
-            for command in plan.commands:
+            for command in commands:
                 result = runner(
                     list(command),
                     cwd=str(self.project_root),
@@ -157,6 +168,12 @@ class PaddleRuntimeManager:
         registry = self.read_registry()
         previous = registry.get("previous")
         if not isinstance(previous, dict) or not Path(str(previous.get("python") or "")).exists():
+            # The first staged activation has no earlier staged runtime.  In
+            # that case an atomic empty registry deliberately returns to the
+            # application's bundled/base interpreter.
+            if isinstance(registry.get("active"), dict):
+                self._write_registry({})
+                return True
             return False
         self._write_registry({"active": previous, "previous": registry.get("active")})
         return True

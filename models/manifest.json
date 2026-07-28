@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "status": "local-unverified",
+  "notes": "No project-controlled model release with an independently verified checksum has been configured. Automatic model download is disabled.",
+  "models": [
+    {
+      "id": "PP-OCRv5_mobile_det",
+      "type": "detection",
+      "version": null,
+      "filename": null,
+      "source": "local PaddleX cache or bundled release asset",
+      "download_url": null,
+      "sha256": null,
+      "size": null,
+      "license": "See PaddleOCR third-party notices",
+      "compatibility": "PaddleOCR 3.x",
+      "active": true,
+      "staged": false,
+      "created_at": null,
+      "downloaded_at": null
+    },
+    {
+      "id": "en_PP-OCRv5_mobile_rec",
+      "type": "recognition",
+      "version": null,
+      "filename": null,
+      "source": "local PaddleX cache or bundled release asset",
+      "download_url": null,
+      "sha256": null,
+      "size": null,
+      "license": "See PaddleOCR third-party notices",
+      "compatibility": "PaddleOCR 3.x",
+      "active": true,
+      "staged": false,
+      "created_at": null,
+      "downloaded_at": null
+    }
+  ]
+}

@@ -4,6 +4,7 @@ import hashlib
 import os
 import queue
 import subprocess
+import sys
 import threading
 import time
 from copy import deepcopy
@@ -15,6 +16,7 @@ from tkinter import filedialog, messagebox, ttk
 from PIL import Image, ImageOps, ImageTk
 
 from . import __version__
+from .version import GITHUB_REPOSITORY, display_build
 from .config import SETTINGS_VERSION, clear_saved_api_key, is_test_update_sentinel, load_settings, save_settings, settings_path
 from .excel_export import export_results
 from .gemini_vision import DEFAULT_GEMINI_MODEL, GEMINI_MODEL_CHOICES, GeminiVisionEngine
@@ -33,6 +35,7 @@ from .ui import ApplicationShell
 from .ui.state import AppUiState
 from .ui.theme import colors as ui_colors, configure_styles
 from .runtime_manager import PaddleRuntimeManager, RuntimeStagingReport
+from .model_registry import ModelRuntimeManager, ModelValidationReport
 from .update_center import (
     PYPI_PADDLEOCR_URL,
     PaddleRelease,
@@ -54,8 +57,10 @@ from .updater import (
     download_verified,
     fetch_github_latest_release,
     fetch_manifest,
+    launch_pending_installer_update,
     sanitize_update_error,
     select_windows_release_asset,
+    write_pending_installer_update,
 )
 
 
@@ -235,7 +240,7 @@ class CheckVehicleApp(tk.Tk):
         self.telegram_status_var = tk.StringVar(value="Telegram đang tắt.")
         self.update_status_var = tk.StringVar(value="Chưa cấu hình")
         self.update_notes_var = tk.StringVar(value="")
-        self.update_version_var = tk.StringVar(value=f"Phiên bản hiện tại: {__version__} • Build source: không xác định")
+        self.update_version_var = tk.StringVar(value=f"Phiên bản hiện tại: {__version__} • {display_build()}")
         self.paddle_runtime_var = tk.StringVar(value="Đang đọc thông tin PaddleOCR cục bộ…")
         self.paddle_compatibility_var = tk.StringVar(value="Chưa kiểm tra tương thích.")
         self.paddle_update_status_var = tk.StringVar(value="Chưa kiểm tra")
@@ -253,6 +258,7 @@ class CheckVehicleApp(tk.Tk):
         self.current_paddle_release: PaddleRelease | None = None
         self.current_tesseract_manifest: TesseractPackageManifest | None = None
         self.paddle_runtime_manager = PaddleRuntimeManager()
+        self.model_runtime_manager = ModelRuntimeManager()
         self.custom_secret_entries: list[ttk.Entry] = []
         self.custom_model_combo: ttk.Combobox | None = None
         self.provider_refresh_button: ttk.Button | None = None
@@ -265,6 +271,8 @@ class CheckVehicleApp(tk.Tk):
         self.paddle_activate_button: ttk.Button | None = None
         self.paddle_rollback_button: ttk.Button | None = None
         self.model_manage_button: ttk.Button | None = None
+        self.model_activate_button: ttk.Button | None = None
+        self.model_rollback_button: ttk.Button | None = None
         self.tesseract_manage_button: ttk.Button | None = None
         self.toggle_update_technical_details = None
         self.update_technical_details_visible = None
@@ -382,7 +390,8 @@ class CheckVehicleApp(tk.Tk):
         if saved_update_source_mode not in {"disabled", "github", "manifest"}:
             saved_update_source_mode = "manifest" if update_settings.get("manifest_url") else "disabled"
         self.update_source_mode_var = tk.StringVar(value=UPDATE_SOURCE_LABELS[saved_update_source_mode])
-        self.github_repository_var = tk.StringVar(value=str(update_settings.get("github_repository") or ""))
+        self.github_repository_var = tk.StringVar(value=str(update_settings.get("github_repository") or GITHUB_REPOSITORY or ""))
+        self.github_token_var = tk.StringVar(value=str(update_settings.get("github_token") or ""))
         self.update_manifest_url_var = tk.StringVar(value=str(update_settings.get("manifest_url") or ""))
         self.paddle_release_source_var = tk.StringVar(value=str(update_settings.get("paddle_release_source") or PYPI_PADDLEOCR_URL))
         self.paddle_candidate_version_var = tk.StringVar(value=str(update_settings.get("paddle_candidate_version") or ""))
@@ -418,6 +427,16 @@ class CheckVehicleApp(tk.Tk):
         self._update_key_status()
         self._update_stats()
         self.show_page("scan")
+        # An explicit environment-only review state lets the packaged-artifact
+        # harness capture a real Settings/Updates screen without persisting a
+        # test selection into an operator profile.  It is intentionally not a
+        # user setting or public command-line feature.
+        ui_review_page = os.environ.get("CHECK_VEHICLE_UI_REVIEW_PAGE", "").strip().lower()
+        if ui_review_page in {"results", "settings", "updates"}:
+            if ui_review_page == "updates":
+                self.show_settings_section("updates")
+            else:
+                self.show_page(ui_review_page)
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self._drain_after_id = self.after(100, self._drain_events)
 
@@ -1367,7 +1386,14 @@ class CheckVehicleApp(tk.Tk):
                 elif kind == "model_staged":
                     _, result = event
                     self.model_update_status_var.set(result.message)
+                    if self.model_activate_button:
+                        self.model_activate_button.configure(state="normal" if result.passed else "disabled")
                 elif kind == "model_stage_error":
+                    _, message = event
+                    self.model_update_status_var.set(message)
+                    if self.model_activate_button:
+                        self.model_activate_button.configure(state="disabled")
+                elif kind == "model_activated":
                     _, message = event
                     self.model_update_status_var.set(message)
                 elif kind == "tesseract_status":
@@ -1768,6 +1794,7 @@ class CheckVehicleApp(tk.Tk):
         source_mode = self._update_source_mode_key()
         repository = self.github_repository_var.get().strip()
         manifest_url = self.update_manifest_url_var.get().strip()
+        github_token = self.github_token_var.get().strip()
         if not self._has_configured_update_source():
             self.current_update_manifest = None
             self.update_status_var.set("Chưa cấu hình nguồn cập nhật ứng dụng.")
@@ -1779,8 +1806,8 @@ class CheckVehicleApp(tk.Tk):
         def worker() -> None:
             try:
                 if source_mode == "github":
-                    release = fetch_github_latest_release(repository, timeout=15.0)
-                    manifest = select_windows_release_asset(release)
+                    release = fetch_github_latest_release(repository, timeout=15.0, token=github_token)
+                    manifest = select_windows_release_asset(release, token=github_token)
                 else:
                     release = None
                     manifest = fetch_manifest(manifest_url, timeout=15.0)
@@ -1816,12 +1843,33 @@ class CheckVehicleApp(tk.Tk):
         threading.Thread(target=worker, name="check_vehicle_update_download", daemon=True).start()
 
     def prepare_install_after_close(self) -> None:
-        """Keep installation explicit; this phase never starts an installer."""
+        """Schedule a verified installer only after explicit user confirmation."""
         if not self.downloaded_update_path or not self.downloaded_update_path.exists():
             self.update_status_var.set("Chưa có gói đã xác minh để cài đặt.")
             self._set_update_primary_action("Kiểm tra", self.check_for_updates)
             return
-        self.update_status_var.set("Đã tải và xác minh. Đóng ứng dụng, rồi chạy gói cập nhật đã tải để cài thủ công.")
+        if not getattr(sys, "frozen", False):
+            self.update_status_var.set("Đã tải và xác minh. Tự cài đặt chỉ khả dụng trong bản ứng dụng đã đóng gói; source runtime không bị thay đổi.")
+            return
+        manifest = self.current_update_manifest
+        if manifest is None:
+            self.update_status_var.set("Thiếu metadata gói đã xác minh; không thể cài đặt an toàn.")
+            return
+        try:
+            pending = write_pending_installer_update(
+                self.downloaded_update_path,
+                manifest,
+                install_dir=Path(sys.executable).resolve().parent,
+                executable_path=Path(sys.executable).resolve(),
+                state_dir=settings_path().parent / "updates",
+            )
+            launch_pending_installer_update(pending)
+        except Exception as exc:
+            self._log(f"Không tạo được updater helper: {type(exc).__name__}")
+            self.update_status_var.set("Không thể chuẩn bị cài đặt an toàn. Gói đã tải vẫn được giữ nguyên.")
+            return
+        self.update_status_var.set("Đã chuẩn bị cài đặt sau khi ứng dụng đóng. Cấu hình và dữ liệu người dùng được giữ ngoài thư mục cài đặt.")
+        self.after(250, self._on_close)
 
     def show_paddle_update_details(self) -> None:
         self.show_settings_section("updates")
@@ -1837,6 +1885,9 @@ class CheckVehicleApp(tk.Tk):
         inventory = paddle_model_inventory()
         active = [item.name for item in inventory if item.active]
         self.model_inventory_var.set(" • ".join(active) if active else "Chưa tìm thấy model OCR cục bộ")
+        staged_candidate = self._staged_model_candidate()
+        if self.model_activate_button:
+            self.model_activate_button.configure(state="normal" if staged_candidate and self.model_runtime_manager.can_activate(staged_candidate) else "disabled")
         if not self.model_manifest_url_var.get().strip():
             self.model_update_status_var.set("Chưa cấu hình nguồn model đã xác minh")
         if not self._has_configured_update_source():
@@ -1918,9 +1969,16 @@ class CheckVehicleApp(tk.Tk):
             state = "Đang hoạt động" if item.active else "Chưa tìm thấy"
             ttk.Label(details, text=item.role, style="Surface.TLabel").grid(row=row, column=0, sticky="w", padx=(0, 12), pady=4)
             ttk.Label(details, text=f"{item.name} — {state}", style="SurfaceMuted.TLabel").grid(row=row, column=1, sticky="w", pady=4)
-        ttk.Button(body, text="Tải model đã xác minh", command=self.stage_model_from_manifest, style="Primary.TButton").grid(row=3, column=0, sticky="w", pady=(14, 6))
+        actions = ttk.Frame(body, style="App.TFrame")
+        actions.grid(row=3, column=0, sticky="w", pady=(14, 6))
+        ttk.Button(actions, text="Tải và thử model đã xác minh", command=self.stage_model_from_manifest, style="Primary.TButton").grid(row=0, column=0, sticky="w", padx=(0, 6))
+        candidate = self._staged_model_candidate()
+        activate = ttk.Button(actions, text="Dùng model đã thử ở lần mở sau", command=self.activate_staged_model)
+        activate.grid(row=0, column=1, sticky="w", padx=(0, 6))
+        activate.configure(state="normal" if candidate and self.model_runtime_manager.can_activate(candidate) else "disabled")
+        ttk.Button(actions, text="Quay lại model trước", command=self.rollback_staged_model).grid(row=0, column=2, sticky="w")
         ttk.Label(body, textvariable=self.model_update_status_var, style="Muted.TLabel", wraplength=560).grid(row=4, column=0, sticky="w")
-        ttk.Label(body, text="Chi tiết kỹ thuật và nguồn model nằm trong phần Nâng cao. Kích hoạt model mới chỉ được mở khi launcher hỗ trợ model versioned an toàn.", style="Muted.TLabel", wraplength=560).grid(row=5, column=0, sticky="w", pady=(10, 0))
+        ttk.Label(body, text="Model mới chỉ được dùng sau khi SHA-256 và OCR synthetic đều đạt. Model cũ vẫn được giữ để quay lại.", style="Muted.TLabel", wraplength=560).grid(row=5, column=0, sticky="w", pady=(10, 0))
 
     def stage_model_from_manifest(self) -> None:
         manifest_url = self.model_manifest_url_var.get().strip()
@@ -1932,13 +1990,40 @@ class CheckVehicleApp(tk.Tk):
         def worker() -> None:
             try:
                 manifest = fetch_model_manifest(manifest_url)
-                result = stage_model_archive(manifest, self.paddle_runtime_manager.runtime_root / "model-staging")
+                staged = stage_model_archive(manifest, self.model_runtime_manager.staging_root)
+                result = self.model_runtime_manager.validate_and_record(
+                    version=manifest.version,
+                    stage_dir=staged.stage_dir,
+                    detection_model=manifest.detection_model,
+                    recognition_model=manifest.recognition_model,
+                )
             except Exception:
                 self.event_queue.put(("model_stage_error", "Không thể tải hoặc xác minh model. Model đang dùng không thay đổi."))
             else:
                 self.event_queue.put(("model_staged", result))
 
         threading.Thread(target=worker, name="check_vehicle_model_stage", daemon=True).start()
+
+    def _staged_model_candidate(self) -> str:
+        for acceptance in sorted(self.model_runtime_manager.staging_root.glob("paddleocr-*/acceptance.json"), reverse=True):
+            payload = _read_json_file(acceptance)
+            version = str(payload.get("version") or "").strip()
+            if version and payload.get("passed"):
+                return version
+        return ""
+
+    def activate_staged_model(self) -> None:
+        candidate = self._staged_model_candidate()
+        if not candidate or not self.model_runtime_manager.activate(candidate):
+            self.model_update_status_var.set("Chưa có model đã thử đạt yêu cầu để dùng ở lần mở sau.")
+            return
+        self.event_queue.put(("model_activated", f"Model {candidate} sẽ được dùng ở lần mở sau. Model đang dùng vẫn được giữ để quay lại."))
+
+    def rollback_staged_model(self) -> None:
+        if self.model_runtime_manager.rollback():
+            self.model_update_status_var.set("Đã chọn lại model OCR trước đó cho lần mở sau.")
+        else:
+            self.model_update_status_var.set("Chưa có model đã chọn trước đó để quay lại.")
 
     def check_all_updates(self) -> None:
         """Run only checks in background; no download, install, or model change."""
@@ -2724,6 +2809,7 @@ class CheckVehicleApp(tk.Tk):
             self.telegram_mask_plate_var,
             self.update_source_mode_var,
             self.github_repository_var,
+            self.github_token_var,
             self.update_manifest_url_var,
             self.paddle_release_source_var,
             self.paddle_candidate_version_var,
@@ -2737,6 +2823,7 @@ class CheckVehicleApp(tk.Tk):
             self.plate_recognizer_token_var,
             self.custom_api_key_var,
             self.telegram_bot_token_var,
+            self.github_token_var,
         ):
             variable.trace_add("write", lambda *_args: self._on_api_key_changed())
         for variable in (self.custom_provider_enabled_var, self.custom_base_url_var, self.custom_model_var):
@@ -2752,6 +2839,7 @@ class CheckVehicleApp(tk.Tk):
                 self.plate_recognizer_token_var,
                 self.custom_api_key_var,
                 self.telegram_bot_token_var,
+                self.github_token_var,
             )
         )
         if self._settings_ready and has_any_key and not self.remember_key_var.get():
@@ -2841,6 +2929,7 @@ class CheckVehicleApp(tk.Tk):
                 plate_recognizer_token=self.plate_recognizer_token_var.get().strip() if self.remember_key_var.get() else "",
                 provider_api_keys={"custom_openai": self.custom_api_key_var.get().strip()},
                 telegram_bot_token=self.telegram_bot_token_var.get().strip(),
+                github_token=self.github_token_var.get().strip(),
             )
         except Exception as exc:
             self._log(f"Không lưu được cấu hình: {exc}")
@@ -2858,6 +2947,8 @@ class CheckVehicleApp(tk.Tk):
             saved.append("Provider custom")
         if self.telegram_bot_token_var.get().strip():
             saved.append("Telegram")
+        if self.github_token_var.get().strip():
+            saved.append("GitHub")
         if self.remember_key_var.get() and saved:
             self.key_status_var.set(f"Đã lưu/tải key: {', '.join(saved)} | {settings_path()}")
         elif any(os.environ.get(name) for name in ("PLATE_RECOGNIZER_TOKEN", "GEMINI_API_KEY", "OPENAI_API_KEY")):
@@ -3128,6 +3219,14 @@ def _safe_settings_version(settings: dict) -> int:
         return int(settings.get("version", 0))
     except (TypeError, ValueError):
         return 0
+
+
+def _read_json_file(path: Path) -> dict[str, object]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError):
+        return {}
+    return value if isinstance(value, dict) else {}
 
 
 def _image_iid(path: Path) -> str:
