@@ -32,18 +32,43 @@ jobs:
           .\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
       - name: Compile source
         run: .\.venv\Scripts\python.exe -B -m compileall -q check_vehicle_ocr tests tools main.py
-      - name: Offline deterministic test suite
+      - name: Data, worker and stability tests
         run: |
           $tests = @(
             'tests\dataset_benchmark_test.py', 'tests\performance_stability_test.py',
-            'tests\progress_state_test.py', 'tests\provider_api_mode_test.py',
-            'tests\provider_integration_test.py', 'tests\services_test.py',
+            'tests\progress_state_test.py', 'tests\services_test.py',
+            'tests\worker_manager_test.py'
+          )
+          foreach ($test in $tests) {
+            Write-Host "RUN $test"
+            .\.venv\Scripts\python.exe -B $test
+            if ($LASTEXITCODE -ne 0) {
+              Write-Error "FAILED $test with exit code $LASTEXITCODE"
+              exit $LASTEXITCODE
+            }
+          }
+      - name: Provider, notification and updater tests
+        run: |
+          $tests = @(
+            'tests\provider_api_mode_test.py', 'tests\provider_integration_test.py',
             'tests\telegram_integration_test.py', 'tests\tesseract_optional_test.py',
+            'tests\updater_local_e2e_test.py', 'tests\updater_ui_state_test.py',
+            'tests\release_system_test.py'
+          )
+          foreach ($test in $tests) {
+            Write-Host "RUN $test"
+            .\.venv\Scripts\python.exe -B $test
+            if ($LASTEXITCODE -ne 0) {
+              Write-Error "FAILED $test with exit code $LASTEXITCODE"
+              exit $LASTEXITCODE
+            }
+          }
+      - name: UI, theme and update-center tests
+        run: |
+          $tests = @(
             'tests\theme_contrast_test.py', 'tests\ui_simplification_test.py',
             'tests\ui_smoke_test.py', 'tests\update_actions_control_test.py',
-            'tests\update_center_test.py', 'tests\updater_local_e2e_test.py',
-            'tests\updater_ui_state_test.py', 'tests\worker_manager_test.py',
-            'tests\release_system_test.py'
+            'tests\update_center_test.py'
           )
           foreach ($test in $tests) {
             Write-Host "RUN $test"
