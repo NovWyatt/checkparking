@@ -13,13 +13,15 @@ class ScanPage(Page):
     def __init__(self, parent, controller):
         super().__init__(parent, controller)
         self.columnconfigure((0, 1), weight=1)
-        self.rowconfigure(1, weight=1)
+        self.rowconfigure(2, weight=1)
         self._build_input_step(controller)
         self._build_recognition_step(controller)
         self._build_progress_step(controller)
+        self.bind("<Configure>", self._on_resize, add=True)
 
     def _build_input_step(self, controller) -> None:
         inputs = ttk.LabelFrame(self, text="Bước 1 — Chọn dữ liệu", style="Card.TLabelframe")
+        self.inputs = inputs
         inputs.grid(row=0, column=0, sticky="nsew", padx=(0, 6), pady=(0, 12))
         inputs.columnconfigure((0, 1), weight=1)
         ttk.Label(inputs, text="Chọn từng ảnh hoặc một thư mục ảnh để bắt đầu.", style="SurfaceMuted.TLabel").grid(
@@ -33,6 +35,7 @@ class ScanPage(Page):
 
     def _build_recognition_step(self, controller) -> None:
         settings = ttk.LabelFrame(self, text="Bước 2 — Chọn cách nhận diện", style="Card.TLabelframe")
+        self.settings = settings
         settings.grid(row=0, column=1, sticky="nsew", padx=(6, 0), pady=(0, 12))
         settings.columnconfigure(0, weight=1)
         choices = (
@@ -59,8 +62,8 @@ class ScanPage(Page):
             ttk.Radiobutton(item, text=label, value=value, variable=controller.recognition_mode_var, command=controller._on_recognition_mode_changed).grid(
                 row=0, column=0, sticky="nw", padx=(0, 8)
             )
-            ttk.Label(item, text=description, style="SurfaceMuted.TLabel", wraplength=760).grid(row=0, column=1, sticky="w")
-        controller.ai_config_warning_label = ttk.Label(settings, textvariable=controller.ai_config_warning_var, style="Warning.TLabel", wraplength=760)
+            ttk.Label(item, text=description, style="SurfaceMuted.TLabel", wraplength=430).grid(row=0, column=1, sticky="w")
+        controller.ai_config_warning_label = ttk.Label(settings, textvariable=controller.ai_config_warning_var, style="Warning.TLabel", wraplength=500)
         controller.ai_config_warning_label.grid(row=3, column=0, sticky="w", pady=(4, 2))
         controller.open_ai_settings_button = ttk.Button(settings, text="Mở cài đặt AI", command=lambda: controller.show_settings_section("ai"))
         controller.open_ai_settings_button.grid(row=4, column=0, sticky="w", pady=(0, 10))
@@ -68,19 +71,19 @@ class ScanPage(Page):
         performance = ttk.Frame(settings, style="Surface.TFrame")
         performance.grid(row=5, column=0, sticky="ew", pady=(4, 0))
         performance.columnconfigure(1, weight=1)
-        labelled_combo(performance, 0, "Chế độ quét", controller.paddle_scan_mode_var, controller.paddle_scan_choices, readonly=True)
-        ttk.Label(performance, textvariable=controller.scan_mode_hint_var, style="SurfaceMuted.TLabel", wraplength=700).grid(
+        self.scan_mode_combo = labelled_combo(performance, 0, "Chế độ quét", controller.paddle_scan_mode_var, controller.paddle_scan_choices, readonly=True)
+        ttk.Label(performance, textvariable=controller.scan_mode_hint_var, style="SurfaceMuted.TLabel", wraplength=500).grid(
             row=1, column=0, columnspan=2, sticky="w", pady=(0, 6)
         )
-        labelled_combo(performance, 2, "Hiệu năng", controller.performance_preset_var, controller.performance_preset_choices, readonly=True)
-        ttk.Label(performance, textvariable=controller.performance_hint_var, style="SurfaceMuted.TLabel", wraplength=700).grid(
+        self.performance_combo = labelled_combo(performance, 2, "Hiệu năng", controller.performance_preset_var, controller.performance_preset_choices, readonly=True)
+        ttk.Label(performance, textvariable=controller.performance_hint_var, style="SurfaceMuted.TLabel", wraplength=500).grid(
             row=3, column=0, columnspan=2, sticky="w", pady=(0, 6)
         )
 
         self.advanced = ttk.Frame(settings, style="Surface.TFrame")
         self.advanced.columnconfigure(0, weight=1)
         ttk.Label(self.advanced, text="Thông tin kỹ thuật", style="Section.TLabel").grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 4))
-        ttk.Label(self.advanced, textvariable=controller.advanced_worker_summary_var, style="SurfaceMuted.TLabel", wraplength=760).grid(
+        ttk.Label(self.advanced, textvariable=controller.advanced_worker_summary_var, style="SurfaceMuted.TLabel", wraplength=500).grid(
             row=1, column=0, sticky="w", pady=(0, 4)
         )
         ttk.Button(self.advanced, text="Mở phần Nâng cao trong Cài đặt", command=lambda: controller.show_settings_section("advanced")).grid(
@@ -91,6 +94,7 @@ class ScanPage(Page):
 
     def _build_progress_step(self, controller) -> None:
         progress = ttk.LabelFrame(self, text="Bước 3 — Bắt đầu", style="Card.TLabelframe")
+        self.progress_panel = progress
         progress.grid(row=1, column=0, columnspan=2, sticky="new", pady=(0, 12))
         progress.columnconfigure(0, weight=1)
         controller.progress = ttk.Progressbar(progress, mode="determinate")
@@ -120,3 +124,15 @@ class ScanPage(Page):
         else:
             self.advanced.grid(row=7, column=0, sticky="ew", pady=(6, 0))
             self.advanced_toggle.configure(text="Ẩn cài đặt nâng cao")
+
+    def _on_resize(self, event) -> None:
+        # At high Windows scaling a 1366 px screen has less logical width.
+        # Stack the two setup steps instead of clipping their descriptions.
+        if event.width < 980:
+            self.inputs.grid_configure(row=0, column=0, columnspan=2, padx=0)
+            self.settings.grid_configure(row=1, column=0, columnspan=2, padx=0)
+            self.progress_panel.grid_configure(row=2, column=0, columnspan=2)
+        else:
+            self.inputs.grid_configure(row=0, column=0, columnspan=1, padx=(0, 6))
+            self.settings.grid_configure(row=0, column=1, columnspan=1, padx=(6, 0))
+            self.progress_panel.grid_configure(row=1, column=0, columnspan=2)

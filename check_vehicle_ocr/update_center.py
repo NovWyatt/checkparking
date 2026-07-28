@@ -74,6 +74,17 @@ class ModelStageResult:
     message: str
 
 
+@dataclass(frozen=True)
+class TesseractPackageManifest:
+    version: str
+    platform: str
+    download_url: str
+    sha256: str
+    archive_type: str
+    license: str
+    source: str
+
+
 def installed_version(distribution: str) -> str:
     try:
         return importlib.metadata.version(distribution)
@@ -178,6 +189,18 @@ def parse_model_manifest(payload: str | bytes) -> ModelUpdateManifest:
     )
 
 
+def fetch_model_manifest(
+    manifest_url: str,
+    timeout: float = 15.0,
+    *,
+    opener: Callable[..., object] = urllib.request.urlopen,
+) -> ModelUpdateManifest:
+    if not manifest_url.strip():
+        raise ValueError("Chưa cấu hình nguồn model đã xác minh.")
+    with opener(manifest_url, timeout=timeout) as response:
+        return parse_model_manifest(response.read())
+
+
 def stage_model_archive(
     manifest: ModelUpdateManifest,
     destination_root: Path,
@@ -243,3 +266,113 @@ def _safe_extract(archive: zipfile.ZipFile, destination: Path) -> None:
         if target != root and root not in target.parents:
             raise ValueError("Archive model chứa đường dẫn không an toàn.")
     archive.extractall(destination)
+
+
+def parse_tesseract_manifest(payload: str | bytes) -> TesseractPackageManifest:
+    """Validate a project-controlled portable Tesseract package manifest.
+
+    There is intentionally no default upstream binary URL.  The operator can
+    always select an existing executable; downloading happens only when the
+    project owner has configured a specific package and SHA-256.
+    """
+    data = json.loads(payload)
+    required = ("version", "platform", "download_url", "sha256", "archive_type", "license", "source")
+    if not isinstance(data, dict) or any(not isinstance(data.get(key), str) or not data[key].strip() for key in required):
+        raise ValueError("Manifest Tesseract thiếu phiên bản, nguồn hoặc SHA-256.")
+    checksum = data["sha256"].strip().lower()
+    if len(checksum) != 64 or any(character not in "0123456789abcdef" for character in checksum):
+        raise ValueError("SHA-256 của gói Tesseract không hợp lệ.")
+    archive_type = data["archive_type"].strip().lower()
+    if archive_type != "zip":
+        raise ValueError("Chỉ hỗ trợ gói Tesseract portable dạng ZIP đã xác minh.")
+    return TesseractPackageManifest(
+        version=data["version"].strip(),
+        platform=data["platform"].strip().lower(),
+        download_url=data["download_url"].strip(),
+        sha256=checksum,
+        archive_type=archive_type,
+        license=data["license"].strip(),
+        source=data["source"].strip(),
+    )
+
+
+def fetch_tesseract_manifest(
+    manifest_url: str,
+    timeout: float = 15.0,
+    *,
+    opener: Callable[..., object] = urllib.request.urlopen,
+) -> TesseractPackageManifest:
+    if not manifest_url.strip():
+        raise ValueError("Chưa cấu hình nguồn gói Tesseract đã xác minh.")
+    with opener(manifest_url, timeout=timeout) as response:
+        return parse_tesseract_manifest(response.read())
+
+
+def select_tesseract_executable(path: str | Path) -> Path | None:
+    """Resolve an operator-selected executable or portable directory safely."""
+    candidate = Path(path).expanduser()
+    if candidate.is_dir():
+        # A verified portable archive commonly has a single top-level folder
+        # such as ``portable`` or ``bin``.  Support those predictable layouts
+        # without recursively walking an arbitrary user-selected drive.
+        for executable in (candidate / "tesseract.exe", candidate / "bin" / "tesseract.exe", candidate / "portable" / "tesseract.exe"):
+            if executable.is_file():
+                return executable.resolve()
+        return None
+    if candidate.name.lower() != "tesseract.exe" or not candidate.is_file():
+        return None
+    return candidate.resolve()
+
+
+def stage_tesseract_archive(
+    manifest: TesseractPackageManifest,
+    destination_root: Path,
+    *,
+    opener: Callable[..., object] = urllib.request.urlopen,
+    timeout: float = 60.0,
+) -> Path:
+    if manifest.platform not in {"windows-x64", "win-x64", "windows"}:
+        raise ValueError("Gói Tesseract không dành cho Windows x64.")
+    destination_root.mkdir(parents=True, exist_ok=True)
+    stage_dir = destination_root / f"tesseract-{manifest.version}"
+    if stage_dir.exists():
+        raise FileExistsError("Thư mục Tesseract đã tồn tại; không ghi đè bản dự phòng cũ.")
+    temporary_path: Path | None = None
+    try:
+        digest = hashlib.sha256()
+        with opener(manifest.download_url, timeout=timeout) as response:
+            with tempfile.NamedTemporaryFile(dir=destination_root, prefix=".tesseract_stage_", suffix=".tmp", delete=False) as temporary:
+                temporary_path = Path(temporary.name)
+                while chunk := response.read(1024 * 1024):
+                    temporary.write(chunk)
+                    digest.update(chunk)
+        if digest.hexdigest() != manifest.sha256:
+            raise ValueError("Checksum gói Tesseract không khớp; không lưu bản staging.")
+        stage_dir.mkdir(parents=True)
+        with zipfile.ZipFile(temporary_path) as archive:
+            _safe_extract(archive, stage_dir)
+        executable = select_tesseract_executable(stage_dir)
+        if executable is None:
+            nested = next((item for item in stage_dir.rglob("tesseract.exe") if item.is_file()), None)
+            executable = nested.resolve() if nested else None
+        if executable is None:
+            raise ValueError("Gói Tesseract đã xác minh nhưng không chứa tesseract.exe.")
+        return executable
+    except Exception:
+        if stage_dir.exists():
+            shutil.rmtree(stage_dir, ignore_errors=True)
+        raise
+    finally:
+        if temporary_path and temporary_path.exists():
+            temporary_path.unlink(missing_ok=True)
+
+
+def stage_local_tesseract_package(package_path: Path, manifest: TesseractPackageManifest, destination_root: Path) -> Path:
+    """Stage a user-selected local ZIP only after matching its configured hash."""
+    package = Path(package_path)
+    if not package.is_file():
+        raise FileNotFoundError("Không tìm thấy gói Tesseract đã chọn.")
+    digest = hashlib.sha256(package.read_bytes()).hexdigest()
+    if digest != manifest.sha256:
+        raise ValueError("Gói Tesseract đã chọn không khớp SHA-256 trong manifest.")
+    return stage_tesseract_archive(manifest, destination_root, opener=lambda *_args, **_kwargs: package.open("rb"))

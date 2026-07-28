@@ -109,8 +109,9 @@ def main() -> int:
     output_dir = PROJECT_ROOT / "docs" / "ui-review"
     output_dir.mkdir(parents=True, exist_ok=True)
     temporary_appdata = tempfile.TemporaryDirectory(prefix="check_vehicle_ui_capture_")
-    previous_appdata = os.environ.get("APPDATA")
-    os.environ["APPDATA"] = temporary_appdata.name
+    previous_environment = {name: os.environ.get(name) for name in ("APPDATA", "TEMP", "TMP")}
+    for name in previous_environment:
+        os.environ[name] = temporary_appdata.name
     app = CheckVehicleApp()
     app.geometry("1366x768+20+20")
     try:
@@ -209,10 +210,11 @@ def main() -> int:
     finally:
         app.destroy()
         temporary_appdata.cleanup()
-        if previous_appdata is None:
-            os.environ.pop("APPDATA", None)
-        else:
-            os.environ["APPDATA"] = previous_appdata
+        for name, previous_value in previous_environment.items():
+            if previous_value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = previous_value
     # Keep the harness usable in Windows consoles that still use cp1252.
     # The generated screenshots and application text remain UTF-8.
     print(f"Screenshots created at {output_dir}")

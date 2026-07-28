@@ -3,7 +3,41 @@ from __future__ import annotations
 import sys
 import tempfile
 import traceback
+import os
+import subprocess
 from pathlib import Path
+
+
+def _launch_active_runtime_if_needed() -> None:
+    """Run an accepted staged runtime and fall back to this interpreter on failure.
+
+    The parent intentionally waits for the child: a broken candidate exits and
+    the known-good base runtime starts instead.  Self-tests are always run in
+    the explicitly selected interpreter so staging validation cannot redirect
+    to a previously active candidate.
+    """
+    if os.environ.get("CHECK_VEHICLE_RUNTIME_LAUNCHED") or "--self-test-paddle" in sys.argv:
+        return
+    try:
+        from check_vehicle_ocr.runtime_manager import active_runtime_python
+
+        runtime_python = active_runtime_python(Path(__file__).resolve().parent)
+        if runtime_python is None or runtime_python.resolve() == Path(sys.executable).resolve():
+            return
+        completed = subprocess.run(
+            [str(runtime_python), str(Path(__file__).resolve()), *sys.argv[1:]],
+            env={**os.environ, "CHECK_VEHICLE_RUNTIME_LAUNCHED": "1"},
+            check=False,
+        )
+        if completed.returncode == 0:
+            raise SystemExit(0)
+        print("Runtime thử nghiệm không khởi động được; đang quay lại runtime trước đó.", file=sys.stderr)
+    except SystemExit:
+        raise
+    except Exception:
+        # Starting from the bundled/base interpreter is the safe fallback.  Do
+        # not show internal paths or exception details in the UI path.
+        return
 
 
 def _run_paddle_self_test() -> int:
@@ -58,6 +92,7 @@ def _write_self_test_log(message: str) -> None:
 
 
 def main() -> None:
+    _launch_active_runtime_if_needed()
     if "--self-test-paddle" in sys.argv:
         raise SystemExit(_run_paddle_self_test())
 

@@ -1,0 +1,36 @@
+{
+  "available_memory_mb_before": 2531.4609375,
+  "batches": {
+    "10": {
+      "shared_one_worker": {
+        "cold_init_seconds": 1.5425001999974484,
+        "batch_seconds": 7.139964600006351,
+        "images_per_minute": 84.03403008461223,
+        "peak_working_set_mb": 357.65234375,
+        "engine_count": 1,
+        "errors": 0
+      },
+      "two_independent_engines": {
+        "cold_init_seconds": 1.7926493999984814,
+        "batch_seconds": 6.949715099995956,
+        "images_per_minute": 86.3344743441856,
+        "peak_working_set_mb": 463.953125,
+        "engine_count": 2,
+        "errors": 0,
+        "matches_baseline": true
+      },
+      "two_processes": {
+        "cold_init_seconds": 1.5296769000124186,
+        "batch_seconds": 9.74736639999901,
+        "images_per_minute": 61.55508835700082,
+        "peak_working_set_mb": 713.01171875,
+        "engine_count": 2,
+        "errors": 0,
+        "matches_baseline": true
+      }
+    }
+  },
+  "notes": [
+    "Batch 30 bị bỏ qua vì RAM khả dụng dưới 6 GB."
+  ]
+}

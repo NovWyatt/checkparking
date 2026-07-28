@@ -3,6 +3,7 @@ openai>=2.0
 opencv-python>=4.9
 openpyxl>=3.1
 open-image-models[onnx]==0.5.1
+packaging>=23.2
 paddleocr==3.5.0
 paddlepaddle==3.3.1
 pillow>=10.2

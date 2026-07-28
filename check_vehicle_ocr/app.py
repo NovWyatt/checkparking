@@ -15,7 +15,7 @@ from tkinter import filedialog, messagebox, ttk
 from PIL import Image, ImageOps, ImageTk
 
 from . import __version__
-from .config import SETTINGS_VERSION, clear_saved_api_key, load_settings, save_settings, settings_path
+from .config import SETTINGS_VERSION, clear_saved_api_key, is_test_update_sentinel, load_settings, save_settings, settings_path
 from .excel_export import export_results
 from .gemini_vision import DEFAULT_GEMINI_MODEL, GEMINI_MODEL_CHOICES, GeminiVisionEngine
 from .gpt_vision import DEFAULT_GPT_MODEL, GPT_MODEL_CHOICES, GptVisionEngine
@@ -32,8 +32,31 @@ from .telegram_notify import AsyncTelegramNotifier, TelegramSettings
 from .ui import ApplicationShell
 from .ui.state import AppUiState
 from .ui.theme import colors as ui_colors, configure_styles
-from .update_center import PYPI_PADDLEOCR_URL, PaddleRelease, build_paddle_staging_plan, fetch_paddle_release, paddle_model_inventory, paddle_runtime_info
-from .updater import UpdateManifest, compare_versions, download_verified, fetch_manifest
+from .runtime_manager import PaddleRuntimeManager, RuntimeStagingReport
+from .update_center import (
+    PYPI_PADDLEOCR_URL,
+    PaddleRelease,
+    TesseractPackageManifest,
+    fetch_model_manifest,
+    fetch_paddle_release,
+    fetch_tesseract_manifest,
+    paddle_model_inventory,
+    paddle_runtime_info,
+    select_tesseract_executable,
+    stage_model_archive,
+    stage_tesseract_archive,
+    stage_local_tesseract_package,
+)
+from .updater import (
+    GitHubRelease,
+    UpdateManifest,
+    compare_versions,
+    download_verified,
+    fetch_github_latest_release,
+    fetch_manifest,
+    sanitize_update_error,
+    select_windows_release_asset,
+)
 
 
 THEMES = {
@@ -111,6 +134,11 @@ PERFORMANCE_PRESET_LABELS = {
     "AUTO": "Tự động — Khuyên dùng",
     "LOW_MEMORY": "Tiết kiệm RAM",
     "FAST": "Ưu tiên tốc độ",
+}
+UPDATE_SOURCE_LABELS = {
+    "disabled": "Tắt cập nhật",
+    "github": "GitHub Releases",
+    "manifest": "Manifest tùy chỉnh",
 }
 
 
@@ -205,29 +233,41 @@ class CheckVehicleApp(tk.Tk):
         self.export_status_var = tk.StringVar(value="Chưa có dữ liệu để xuất.")
         self.provider_status_var = tk.StringVar(value="Chưa kiểm tra kết nối.")
         self.telegram_status_var = tk.StringVar(value="Telegram đang tắt.")
-        self.update_status_var = tk.StringVar(value="Chưa kiểm tra cập nhật.")
+        self.update_status_var = tk.StringVar(value="Chưa cấu hình")
         self.update_notes_var = tk.StringVar(value="")
         self.update_version_var = tk.StringVar(value=f"Phiên bản hiện tại: {__version__} • Build source: không xác định")
         self.paddle_runtime_var = tk.StringVar(value="Đang đọc thông tin PaddleOCR cục bộ…")
         self.paddle_compatibility_var = tk.StringVar(value="Chưa kiểm tra tương thích.")
-        self.paddle_update_status_var = tk.StringVar(value="Chưa kiểm tra bản PaddleOCR mới.")
+        self.paddle_update_status_var = tk.StringVar(value="Chưa kiểm tra")
         self.paddle_release_notes_var = tk.StringVar(value="Chưa có ghi chú phát hành.")
         self.model_inventory_var = tk.StringVar(value="Đang đọc model cục bộ…")
-        self.model_update_status_var = tk.StringVar(value="Chưa cấu hình nguồn model đã xác minh.")
-        self.tesseract_status_var = tk.StringVar(value="Chưa kiểm tra Tesseract dự phòng.")
+        self.model_update_status_var = tk.StringVar(value="Chưa cấu hình nguồn model")
+        self.tesseract_status_var = tk.StringVar(value="Chưa kiểm tra")
         self.batch_progress: BatchProgress | None = None
         self.worker_manager: WorkerManager | None = None
         self.telegram_notifier: AsyncTelegramNotifier | None = None
         self.telegram_percent_sent: set[int] = set()
         self.current_update_manifest: UpdateManifest | None = None
+        self.current_github_release: GitHubRelease | None = None
+        self.downloaded_update_path: Path | None = None
         self.current_paddle_release: PaddleRelease | None = None
+        self.current_tesseract_manifest: TesseractPackageManifest | None = None
+        self.paddle_runtime_manager = PaddleRuntimeManager()
         self.custom_secret_entries: list[ttk.Entry] = []
         self.custom_model_combo: ttk.Combobox | None = None
         self.provider_refresh_button: ttk.Button | None = None
         self.provider_test_button: ttk.Button | None = None
         self.update_check_button: ttk.Button | None = None
         self.update_download_button: ttk.Button | None = None
+        self.update_source_button: ttk.Button | None = None
+        self.check_all_button: ttk.Button | None = None
         self.paddle_stage_button: ttk.Button | None = None
+        self.paddle_activate_button: ttk.Button | None = None
+        self.paddle_rollback_button: ttk.Button | None = None
+        self.model_manage_button: ttk.Button | None = None
+        self.tesseract_manage_button: ttk.Button | None = None
+        self.toggle_update_technical_details = None
+        self.update_technical_details_visible = None
         self.settings_notebook: ttk.Notebook | None = None
         self._tesseract_check_inflight = False
         self._last_progress_render_at = 0.0
@@ -283,6 +323,7 @@ class CheckVehicleApp(tk.Tk):
         )
 
         self.tesseract_var = tk.StringVar(value=str(self.settings.get("tesseract_path") or find_tesseract() or ""))
+        self.tesseract_previous_path_var = tk.StringVar(value=str(self.settings.get("tesseract_previous_path") or ""))
         self.tesseract_fallback_enabled_var = tk.BooleanVar(value=bool(self.settings.get("tesseract_fallback_enabled", False)))
         self.recursive_var = tk.BooleanVar(value=bool(self.settings.get("recursive", True)))
         self.blur_threshold_var = tk.DoubleVar(value=float(self.settings.get("blur_threshold", 80.0)))
@@ -337,9 +378,16 @@ class CheckVehicleApp(tk.Tk):
         self.telegram_mask_plate_var = tk.BooleanVar(value=bool(telegram_settings.get("mask_plate_number", False)))
 
         update_settings = self.settings.get("updates") if isinstance(self.settings.get("updates"), dict) else {}
+        saved_update_source_mode = str(update_settings.get("source_mode") or "").strip().lower()
+        if saved_update_source_mode not in {"disabled", "github", "manifest"}:
+            saved_update_source_mode = "manifest" if update_settings.get("manifest_url") else "disabled"
+        self.update_source_mode_var = tk.StringVar(value=UPDATE_SOURCE_LABELS[saved_update_source_mode])
+        self.github_repository_var = tk.StringVar(value=str(update_settings.get("github_repository") or ""))
         self.update_manifest_url_var = tk.StringVar(value=str(update_settings.get("manifest_url") or ""))
         self.paddle_release_source_var = tk.StringVar(value=str(update_settings.get("paddle_release_source") or PYPI_PADDLEOCR_URL))
+        self.paddle_candidate_version_var = tk.StringVar(value=str(update_settings.get("paddle_candidate_version") or ""))
         self.model_manifest_url_var = tk.StringVar(value=str(update_settings.get("model_manifest_url") or ""))
+        self.tesseract_manifest_url_var = tk.StringVar(value=str(update_settings.get("tesseract_manifest_url") or ""))
 
         self.status_var = tk.StringVar(value="Sẵn sàng")
         self.key_status_var = tk.StringVar()
@@ -643,7 +691,99 @@ class CheckVehicleApp(tk.Tk):
     def choose_tesseract(self) -> None:
         selected = filedialog.askopenfilename(title="Chọn tesseract.exe", filetypes=[("tesseract.exe", "tesseract.exe"), ("All files", "*.*")])
         if selected:
-            self.tesseract_var.set(selected)
+            executable = select_tesseract_executable(selected)
+            if executable is None:
+                self.tesseract_status_var.set("Tệp đã chọn không phải tesseract.exe hợp lệ.")
+                return
+            self._set_tesseract_executable(executable, "Đã chọn Tesseract dự phòng.")
+
+    def choose_tesseract_folder(self) -> None:
+        selected = filedialog.askdirectory(title="Chọn thư mục Tesseract portable")
+        if not selected:
+            return
+        executable = select_tesseract_executable(selected)
+        if executable is None:
+            self.tesseract_status_var.set("Không tìm thấy tesseract.exe trong thư mục đã chọn.")
+            return
+        self._set_tesseract_executable(executable, "Đã chọn Tesseract portable.")
+
+    def _set_tesseract_executable(self, executable: Path, message: str) -> None:
+        current = self.tesseract_var.get().strip()
+        replacement = str(executable)
+        if current and current != replacement and Path(current).exists():
+            self.tesseract_previous_path_var.set(current)
+        self.tesseract_var.set(replacement)
+        self.tesseract_status_var.set(f"{message} Không bắt buộc khi PaddleOCR hoạt động.")
+        self._schedule_settings_save()
+
+    def rollback_tesseract(self) -> None:
+        previous = Path(self.tesseract_previous_path_var.get().strip())
+        if not previous.is_file():
+            self.tesseract_status_var.set("Chưa có bản Tesseract trước đó để quay lại.")
+            return
+        current = self.tesseract_var.get().strip()
+        self.tesseract_var.set(str(previous))
+        self.tesseract_previous_path_var.set(current)
+        self.tesseract_status_var.set("Đã chọn lại bản Tesseract dự phòng trước đó.")
+        self._schedule_settings_save()
+
+    def manage_tesseract(self) -> None:
+        dialog = tk.Toplevel(self)
+        dialog.title("Tesseract dự phòng")
+        dialog.transient(self)
+        dialog.resizable(False, False)
+        body = ttk.Frame(dialog, style="App.TFrame", padding=16)
+        body.grid(sticky="nsew")
+        ttk.Label(body, text="Tesseract dự phòng", style="PageTitle.TLabel").grid(row=0, column=0, columnspan=2, sticky="w")
+        ttk.Label(body, text="Không bắt buộc khi PaddleOCR hoạt động.", style="Muted.TLabel").grid(row=1, column=0, columnspan=2, sticky="w", pady=(2, 12))
+        ttk.Button(body, text="Chọn tesseract.exe", command=self.choose_tesseract, style="Primary.TButton").grid(row=2, column=0, sticky="ew", padx=(0, 4))
+        ttk.Button(body, text="Chọn thư mục portable", command=self.choose_tesseract_folder).grid(row=2, column=1, sticky="ew", padx=(4, 0))
+        ttk.Button(body, text="Chọn gói đã tải", command=self.choose_tesseract_package).grid(row=3, column=0, sticky="ew", pady=(8, 0), padx=(0, 4))
+        verified_action = ttk.Button(body, text="Tải gói đã xác minh", command=self.stage_tesseract_from_manifest)
+        verified_action.grid(row=3, column=1, sticky="ew", pady=(8, 0), padx=(4, 0))
+        ttk.Button(body, text="Quay lại bản trước", command=self.rollback_tesseract).grid(row=4, column=0, sticky="w", pady=(8, 0))
+        ttk.Label(body, textvariable=self.tesseract_status_var, style="Muted.TLabel", wraplength=440).grid(row=5, column=0, columnspan=2, sticky="w", pady=(12, 0))
+        ttk.Label(body, text="Nguồn gói xác minh được cấu hình trong Chi tiết kỹ thuật của Cập nhật.", style="Muted.TLabel", wraplength=440).grid(row=6, column=0, columnspan=2, sticky="w", pady=(6, 0))
+        body.columnconfigure((0, 1), weight=1)
+
+    def choose_tesseract_package(self) -> None:
+        selected = filedialog.askopenfilename(title="Chọn gói Tesseract ZIP", filetypes=[("ZIP", "*.zip")])
+        if not selected:
+            return
+        manifest_url = self.tesseract_manifest_url_var.get().strip()
+        if not manifest_url:
+            self.tesseract_status_var.set("Chưa cấu hình nguồn gói xác minh; hãy chọn tesseract.exe hoặc thư mục portable.")
+            return
+        self.tesseract_status_var.set("Đang xác minh gói Tesseract đã chọn…")
+
+        def worker() -> None:
+            try:
+                manifest = fetch_tesseract_manifest(manifest_url)
+                executable = stage_local_tesseract_package(Path(selected), manifest, self.paddle_runtime_manager.runtime_root / "tesseract-staging")
+            except Exception:
+                self.event_queue.put(("tesseract_status", "Không thể xác minh gói Tesseract đã chọn. Runtime hiện tại không thay đổi."))
+            else:
+                self.event_queue.put(("tesseract_staged", executable))
+
+        threading.Thread(target=worker, name="check_vehicle_tesseract_local_stage", daemon=True).start()
+
+    def stage_tesseract_from_manifest(self) -> None:
+        manifest_url = self.tesseract_manifest_url_var.get().strip()
+        if not manifest_url:
+            self.tesseract_status_var.set("Chưa cấu hình nguồn gói xác minh. Bạn vẫn có thể chọn Tesseract đã cài trên máy.")
+            return
+        self.tesseract_status_var.set("Đang tải gói Tesseract đã xác minh…")
+
+        def worker() -> None:
+            try:
+                manifest = fetch_tesseract_manifest(manifest_url)
+                executable = stage_tesseract_archive(manifest, self.paddle_runtime_manager.runtime_root / "tesseract-staging")
+            except Exception:
+                self.event_queue.put(("tesseract_status", "Không thể tải hoặc xác minh gói Tesseract. Bản hiện tại vẫn được giữ nguyên."))
+            else:
+                self.event_queue.put(("tesseract_staged", executable))
+
+        threading.Thread(target=worker, name="check_vehicle_tesseract_stage", daemon=True).start()
 
     def choose_output(self) -> None:
         selected = filedialog.asksaveasfilename(
@@ -1152,26 +1292,29 @@ class CheckVehicleApp(tk.Tk):
                     comparison = compare_versions(manifest.version, __version__)
                     self.current_update_manifest = manifest if comparison > 0 else None
                     if comparison > 0:
-                        self.update_status_var.set(f"Có bản mới {manifest.version}. Chưa tải file.")
+                        self.update_status_var.set(f"Có bản mới {manifest.version}")
+                        self._set_update_primary_action("Tải bản cập nhật", self.download_update)
                     elif comparison == 0:
                         self.update_status_var.set(f"Đang dùng đúng phiên bản {__version__}; không cần tải lại.")
+                        self._set_update_primary_action("Kiểm tra", self.check_for_updates)
                     else:
                         self.update_status_var.set(f"Manifest có bản {manifest.version} cũ hơn phiên bản hiện tại {__version__}.")
+                        self._set_update_primary_action("Kiểm tra", self.check_for_updates)
                     self.update_notes_var.set(manifest.release_notes)
-                    if self.update_download_button:
-                        self.update_download_button.configure(state="normal" if comparison > 0 else "disabled")
-                    if self.update_check_button:
-                        self.update_check_button.configure(state="normal")
                 elif kind == "update_downloaded":
                     _, downloaded = event
-                    self.update_status_var.set(f"Đã tải và xác minh SHA-256: {downloaded}. Sẵn sàng cài đặt thủ công.")
+                    self.update_status_var.set("Đã tải và xác minh")
+                    self.update_notes_var.set(f"Gói đã lưu an toàn tại {downloaded.name}. Cài đặt sẽ được thực hiện thủ công khi ứng dụng đã đóng.")
+                    self._set_update_primary_action("Cài khi đóng app", self.prepare_install_after_close)
                 elif kind == "update_error":
-                    _, message = event
+                    _, message, *debug = event
                     self.update_status_var.set(message)
-                    if self.update_check_button:
-                        self.update_check_button.configure(state="normal")
-                    if self.update_download_button:
-                        self.update_download_button.configure(state="normal" if self.current_update_manifest else "disabled")
+                    if debug:
+                        self._log(f"Update error: {debug[0]}")
+                    if self.current_update_manifest:
+                        self._set_update_primary_action("Tải bản cập nhật", self.download_update)
+                    else:
+                        self._set_update_primary_action("Kiểm tra", self.check_for_updates)
                 elif kind == "paddle_checked":
                     _, release = event
                     self.current_paddle_release = release
@@ -1190,15 +1333,61 @@ class CheckVehicleApp(tk.Tk):
                         else:
                             self.paddle_update_status_var.set(f"Nguồn trả PaddleOCR {release.version}, cũ hơn phiên bản đang cài {current}.")
                     if self.paddle_stage_button:
-                        self.paddle_stage_button.configure(state="normal" if can_stage else "disabled")
+                        if can_stage:
+                            self.paddle_stage_button.configure(text="Thử bản mới", command=self.prepare_paddle_staging, state="normal")
+                        else:
+                            self.paddle_stage_button.configure(text="Kiểm tra", command=self.check_paddle_updates, state="normal")
+                    if not self.paddle_candidate_version_var.get().strip():
+                        self.paddle_candidate_version_var.set(release.version)
                 elif kind == "paddle_error":
+                    _, message, *debug = event
+                    self.paddle_update_status_var.set(message)
+                    if debug:
+                        self._log(f"Paddle update error: {debug[0]}")
+                    if self.paddle_stage_button:
+                        self.paddle_stage_button.configure(text="Kiểm tra", command=self.check_paddle_updates, state="normal")
+                elif kind == "paddle_staged":
+                    _, report = event
+                    self.paddle_update_status_var.set(report.summary)
+                    if self.paddle_activate_button:
+                        self.paddle_activate_button.configure(state="normal" if report.passed else "disabled")
+                    if self.paddle_stage_button:
+                        self.paddle_stage_button.configure(
+                            text="Đã thử xong" if report.passed else "Thử lại",
+                            command=self.prepare_paddle_staging,
+                            state="disabled" if report.passed else "normal",
+                        )
+                elif kind == "paddle_activated":
                     _, message = event
                     self.paddle_update_status_var.set(message)
-                    if self.paddle_stage_button:
-                        self.paddle_stage_button.configure(state="disabled")
+                elif kind == "tesseract_staged":
+                    _, executable = event
+                    self._set_tesseract_executable(Path(executable), "Đã chuẩn bị Tesseract dự phòng đã xác minh.")
+                    self.refresh_tesseract_status()
+                elif kind == "model_staged":
+                    _, result = event
+                    self.model_update_status_var.set(result.message)
+                elif kind == "model_stage_error":
+                    _, message = event
+                    self.model_update_status_var.set(message)
                 elif kind == "tesseract_status":
                     _, message = event
                     self._tesseract_check_inflight = False
+                    self.tesseract_status_var.set(message)
+                elif kind == "tesseract_manifest":
+                    _, manifest = event
+                    self.current_tesseract_manifest = manifest
+                    path = find_tesseract(self.tesseract_var.get().strip() or None)
+                    if path is None:
+                        self.tesseract_status_var.set("Chưa cài. Có gói Tesseract dự phòng đã xác minh.")
+                        if self.tesseract_manage_button:
+                            self.tesseract_manage_button.configure(text="Cài hoặc chọn", command=self.manage_tesseract)
+                    else:
+                        self.tesseract_status_var.set(f"Đã cài. Có gói dự phòng {manifest.version} để thử.")
+                        if self.tesseract_manage_button:
+                            self.tesseract_manage_button.configure(text="Cập nhật bản dự phòng", command=self.stage_tesseract_from_manifest)
+                elif kind == "tesseract_manifest_error":
+                    _, message = event
                     self.tesseract_status_var.set(message)
         except queue.Empty:
             pass
@@ -1215,6 +1404,13 @@ class CheckVehicleApp(tk.Tk):
             tab = page.tabs.get(section)
             if tab is not None:
                 notebook.select(tab)
+
+    def configure_update_source(self) -> None:
+        self.show_settings_section("updates")
+        toggle = self.toggle_update_technical_details
+        visible = self.update_technical_details_visible
+        if callable(toggle) and (not callable(visible) or not visible()):
+            toggle()
 
     def _on_recognition_mode_changed(self) -> None:
         mode = self.recognition_mode_var.get().strip()
@@ -1548,32 +1744,63 @@ class CheckVehicleApp(tk.Tk):
             self.provider_test_button.configure(state="normal")
         self._schedule_settings_save()
 
-    def check_for_updates(self) -> None:
-        manifest_url = self.update_manifest_url_var.get().strip()
-        if not manifest_url:
-            self.update_status_var.set("Chưa cấu hình manifest URL. Nhập URL release/manifest trước khi kiểm tra.")
-            return
+    def _update_source_mode_key(self) -> str:
+        value = self.update_source_mode_var.get().strip()
+        for key, label in UPDATE_SOURCE_LABELS.items():
+            if value == label or value.lower() == key:
+                return key
+        return "disabled"
+
+    def _has_configured_update_source(self) -> bool:
+        source_mode = self._update_source_mode_key()
+        if source_mode == "github":
+            return bool(self.github_repository_var.get().strip())
+        if source_mode == "manifest":
+            value = self.update_manifest_url_var.get().strip()
+            return bool(value) and not is_test_update_sentinel(value)
+        return False
+
+    def _set_update_primary_action(self, label: str, command, *, state: str = "normal") -> None:
         if self.update_check_button:
-            self.update_check_button.configure(state="disabled")
-        self.update_status_var.set("Đang tải manifest ở nền…")
+            self.update_check_button.configure(text=label, command=command, state=state)
+
+    def check_for_updates(self) -> None:
+        source_mode = self._update_source_mode_key()
+        repository = self.github_repository_var.get().strip()
+        manifest_url = self.update_manifest_url_var.get().strip()
+        if not self._has_configured_update_source():
+            self.current_update_manifest = None
+            self.update_status_var.set("Chưa cấu hình nguồn cập nhật ứng dụng.")
+            self._set_update_primary_action("Thiết lập nguồn", self.configure_update_source)
+            return
+        self._set_update_primary_action("Đang kiểm tra…", self.check_for_updates, state="disabled")
+        self.update_status_var.set("Đang kiểm tra ở nền…")
 
         def worker() -> None:
             try:
-                manifest = fetch_manifest(manifest_url, timeout=15.0)
+                if source_mode == "github":
+                    release = fetch_github_latest_release(repository, timeout=15.0)
+                    manifest = select_windows_release_asset(release)
+                else:
+                    release = None
+                    manifest = fetch_manifest(manifest_url, timeout=15.0)
             except Exception as exc:
-                self.event_queue.put(("update_error", f"Không kiểm tra được cập nhật: {exc}"))
+                self.event_queue.put(("update_error", sanitize_update_error(exc), type(exc).__name__))
             else:
+                self.current_github_release = release
                 self.event_queue.put(("update_checked", manifest))
 
         threading.Thread(target=worker, name="check_vehicle_update_check", daemon=True).start()
 
     def download_update(self) -> None:
+        if self.downloaded_update_path and self.downloaded_update_path.exists():
+            self.prepare_install_after_close()
+            return
         manifest = self.current_update_manifest
         if not manifest:
-            self.update_status_var.set("Hãy kiểm tra manifest trước khi tải cập nhật.")
+            self.update_status_var.set("Hãy kiểm tra nguồn cập nhật trước khi tải.")
             return
-        if self.update_download_button:
-            self.update_download_button.configure(state="disabled")
+        self._set_update_primary_action("Đang tải…", self.download_update, state="disabled")
         self.update_status_var.set("Đang tải và xác minh SHA-256 ở nền…")
 
         def worker() -> None:
@@ -1581,27 +1808,42 @@ class CheckVehicleApp(tk.Tk):
                 destination = settings_path().parent / "updates"
                 downloaded = download_verified(manifest, destination, timeout=60.0)
             except Exception as exc:
-                self.event_queue.put(("update_error", f"Không tải được cập nhật: {exc}"))
+                self.event_queue.put(("update_error", sanitize_update_error(exc), type(exc).__name__))
             else:
+                self.downloaded_update_path = downloaded
                 self.event_queue.put(("update_downloaded", downloaded))
 
         threading.Thread(target=worker, name="check_vehicle_update_download", daemon=True).start()
 
+    def prepare_install_after_close(self) -> None:
+        """Keep installation explicit; this phase never starts an installer."""
+        if not self.downloaded_update_path or not self.downloaded_update_path.exists():
+            self.update_status_var.set("Chưa có gói đã xác minh để cài đặt.")
+            self._set_update_primary_action("Kiểm tra", self.check_for_updates)
+            return
+        self.update_status_var.set("Đã tải và xác minh. Đóng ứng dụng, rồi chạy gói cập nhật đã tải để cài thủ công.")
+
+    def show_paddle_update_details(self) -> None:
+        self.show_settings_section("updates")
+        toggle = self.toggle_update_technical_details
+        visible = self.update_technical_details_visible
+        if callable(toggle) and (not callable(visible) or not visible()):
+            toggle()
+
     def refresh_update_center_state(self) -> None:
         runtime = paddle_runtime_info()
-        self.paddle_runtime_var.set(f"PaddleOCR: {runtime.paddleocr_version} • PaddlePaddle: {runtime.paddlepaddle_version}")
-        self.paddle_compatibility_var.set(runtime.compatibility)
+        self.paddle_runtime_var.set(f"Đang dùng PaddleOCR {runtime.paddleocr_version}")
+        self.paddle_compatibility_var.set("Sẽ thử nghiệm riêng trước khi dùng bản mới.")
         inventory = paddle_model_inventory()
-        details = []
-        for item in inventory:
-            status = "Đang hoạt động" if item.active else "Chưa tìm thấy"
-            checksum = "chưa có manifest checksum" if item.checksum is None else item.checksum
-            version = item.version or "không xác định"
-            downloaded_at = item.downloaded_at or "không xác định"
-            details.append(f"{item.role}: {item.name} — {status}; phiên bản {version}; {item.source}; checksum {checksum}; ngày tải {downloaded_at}.")
-        self.model_inventory_var.set("\n".join(details))
+        active = [item.name for item in inventory if item.active]
+        self.model_inventory_var.set(" • ".join(active) if active else "Chưa tìm thấy model OCR cục bộ")
         if not self.model_manifest_url_var.get().strip():
-            self.model_update_status_var.set("Chưa cấu hình nguồn model đã xác minh; không tải hoặc thay model.")
+            self.model_update_status_var.set("Chưa cấu hình nguồn model đã xác minh")
+        if not self._has_configured_update_source():
+            self.update_status_var.set("Chưa cấu hình nguồn cập nhật ứng dụng.")
+            self._set_update_primary_action("Thiết lập nguồn", self.configure_update_source)
+        elif not self.current_update_manifest and not self.downloaded_update_path:
+            self._set_update_primary_action("Kiểm tra", self.check_for_updates)
 
     def check_paddle_updates(self) -> None:
         source = self.paddle_release_source_var.get().strip()
@@ -1609,12 +1851,14 @@ class CheckVehicleApp(tk.Tk):
             self.paddle_update_status_var.set("Chưa cấu hình nguồn kiểm tra PaddleOCR.")
             return
         self.paddle_update_status_var.set("Đang kiểm tra PaddleOCR ở nền…")
+        if self.paddle_stage_button:
+            self.paddle_stage_button.configure(text="Đang kiểm tra…", command=self.check_paddle_updates, state="disabled")
 
         def worker() -> None:
             try:
                 release = fetch_paddle_release(source)
             except Exception as exc:
-                self.event_queue.put(("paddle_error", f"Không kiểm tra được PaddleOCR: {exc}"))
+                self.event_queue.put(("paddle_error", "Không thể kiểm tra PaddleOCR. Kiểm tra kết nối hoặc thử lại.", type(exc).__name__))
             else:
                 self.event_queue.put(("paddle_checked", release))
 
@@ -1623,18 +1867,107 @@ class CheckVehicleApp(tk.Tk):
     def prepare_paddle_staging(self) -> None:
         release = self.current_paddle_release
         if release is None:
-            self.paddle_update_status_var.set("Hãy kiểm tra một phiên bản PaddleOCR cụ thể trước khi xem kế hoạch thử nghiệm.")
+            self.paddle_update_status_var.set("Hãy kiểm tra một phiên bản PaddleOCR cụ thể trước.")
             return
-        plan = build_paddle_staging_plan(release.version)
-        self.paddle_update_status_var.set(" ".join(plan.steps))
+        if self.paddle_stage_button:
+            self.paddle_stage_button.configure(state="disabled")
+        candidate = self.paddle_candidate_version_var.get().strip() or release.version
+        if not candidate:
+            self.paddle_update_status_var.set("Cần chọn một phiên bản PaddleOCR cụ thể trước khi thử.")
+            return
+        self.paddle_update_status_var.set(f"Đang thử PaddleOCR {candidate} trong môi trường riêng…")
+        current_paddlepaddle = paddle_runtime_info().paddlepaddle_version
+        pinned_paddlepaddle = "" if current_paddlepaddle == "Chưa cài" else current_paddlepaddle
+
+        def worker() -> None:
+            report = self.paddle_runtime_manager.stage_and_test(candidate, pinned_paddlepaddle)
+            self.event_queue.put(("paddle_staged", report))
+
+        threading.Thread(target=worker, name="check_vehicle_paddle_stage", daemon=True).start()
+
+    def activate_paddle_runtime(self) -> None:
+        release = self.current_paddle_release
+        candidate = self.paddle_candidate_version_var.get().strip() or (release.version if release else "")
+        if not candidate or not self.paddle_runtime_manager.activate(candidate):
+            self.paddle_update_status_var.set("Chưa có bản thử nghiệm đạt yêu cầu để dùng ở lần mở sau.")
+            return
+        self.event_queue.put(("paddle_activated", f"PaddleOCR {candidate} sẽ được dùng ở lần mở sau. Runtime hiện tại vẫn được giữ để quay lại."))
+
+    def rollback_paddle_runtime(self) -> None:
+        if self.paddle_runtime_manager.rollback():
+            self.paddle_update_status_var.set("Đã chọn lại runtime PaddleOCR trước đó cho lần mở sau.")
+        else:
+            self.paddle_update_status_var.set("Chưa có runtime trước đó để quay lại.")
+
+    def manage_models(self) -> None:
+        dialog = tk.Toplevel(self)
+        dialog.title("Quản lý model OCR")
+        dialog.transient(self)
+        dialog.geometry("620x420")
+        body = ttk.Frame(dialog, style="App.TFrame", padding=16)
+        body.grid(sticky="nsew")
+        dialog.columnconfigure(0, weight=1)
+        dialog.rowconfigure(0, weight=1)
+        body.columnconfigure(0, weight=1)
+        ttk.Label(body, text="Model OCR", style="PageTitle.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(body, text="Model đang dùng được giữ nguyên cho đến khi có nguồn xác minh và thử nghiệm đạt yêu cầu.", style="Muted.TLabel", wraplength=560).grid(row=1, column=0, sticky="w", pady=(3, 10))
+        details = ttk.Frame(body, style="Surface.TFrame")
+        details.grid(row=2, column=0, sticky="ew")
+        details.columnconfigure(1, weight=1)
+        for row, item in enumerate(paddle_model_inventory()):
+            state = "Đang hoạt động" if item.active else "Chưa tìm thấy"
+            ttk.Label(details, text=item.role, style="Surface.TLabel").grid(row=row, column=0, sticky="w", padx=(0, 12), pady=4)
+            ttk.Label(details, text=f"{item.name} — {state}", style="SurfaceMuted.TLabel").grid(row=row, column=1, sticky="w", pady=4)
+        ttk.Button(body, text="Tải model đã xác minh", command=self.stage_model_from_manifest, style="Primary.TButton").grid(row=3, column=0, sticky="w", pady=(14, 6))
+        ttk.Label(body, textvariable=self.model_update_status_var, style="Muted.TLabel", wraplength=560).grid(row=4, column=0, sticky="w")
+        ttk.Label(body, text="Chi tiết kỹ thuật và nguồn model nằm trong phần Nâng cao. Kích hoạt model mới chỉ được mở khi launcher hỗ trợ model versioned an toàn.", style="Muted.TLabel", wraplength=560).grid(row=5, column=0, sticky="w", pady=(10, 0))
+
+    def stage_model_from_manifest(self) -> None:
+        manifest_url = self.model_manifest_url_var.get().strip()
+        if not manifest_url:
+            self.model_update_status_var.set("Chưa cấu hình nguồn model đã xác minh.")
+            return
+        self.model_update_status_var.set("Đang tải model vào vùng thử nghiệm…")
+
+        def worker() -> None:
+            try:
+                manifest = fetch_model_manifest(manifest_url)
+                result = stage_model_archive(manifest, self.paddle_runtime_manager.runtime_root / "model-staging")
+            except Exception:
+                self.event_queue.put(("model_stage_error", "Không thể tải hoặc xác minh model. Model đang dùng không thay đổi."))
+            else:
+                self.event_queue.put(("model_staged", result))
+
+        threading.Thread(target=worker, name="check_vehicle_model_stage", daemon=True).start()
+
+    def check_all_updates(self) -> None:
+        """Run only checks in background; no download, install, or model change."""
+        self.update_status_var.set("Đang kiểm tra…" if self._has_configured_update_source() else "Chưa cấu hình nguồn cập nhật ứng dụng.")
+        self.paddle_update_status_var.set("Đang kiểm tra…")
+        self.model_update_status_var.set("Đang đọc trạng thái…")
+        self.tesseract_status_var.set("Đang kiểm tra…")
+        if self._has_configured_update_source():
+            self.check_for_updates()
+        else:
+            self._set_update_primary_action("Thiết lập nguồn", self.configure_update_source)
+        self.check_paddle_updates()
+        self.refresh_update_center_state()
+        self.check_tesseract_package()
 
     def refresh_tesseract_status(self) -> None:
         if self._tesseract_check_inflight:
             return
         path = find_tesseract(self.tesseract_var.get().strip() or None)
         if path is None:
-            self.tesseract_status_var.set("Tesseract dự phòng: Chưa cài hoặc chưa tìm thấy. Đây không phải yêu cầu bắt buộc khi PaddleOCR hoạt động.")
+            self.tesseract_status_var.set("Chưa cài. Không bắt buộc khi PaddleOCR hoạt động.")
+            if self.tesseract_manage_button:
+                self.tesseract_manage_button.configure(text="Cài hoặc chọn", command=self.manage_tesseract)
             return
+        if self.tesseract_manage_button:
+            if self.current_tesseract_manifest is not None:
+                self.tesseract_manage_button.configure(text="Cập nhật bản dự phòng", command=self.stage_tesseract_from_manifest)
+            else:
+                self.tesseract_manage_button.configure(text="Kiểm tra phiên bản", command=self.refresh_tesseract_status)
         self._tesseract_check_inflight = True
         self.tesseract_status_var.set("Đang kiểm tra Tesseract ở nền…")
 
@@ -1642,14 +1975,30 @@ class CheckVehicleApp(tk.Tk):
             try:
                 completed = subprocess.run([str(path), "--version"], capture_output=True, text=True, timeout=4, check=False)
                 version_line = (completed.stdout or completed.stderr or "").splitlines()[0].strip() if (completed.stdout or completed.stderr) else "Không đọc được phiên bản"
-                tessdata = path.parent / "tessdata"
-                tessdata_text = str(tessdata) if tessdata.exists() else "chưa tìm thấy tessdata cạnh tesseract.exe"
-                message = f"Tesseract dự phòng: Đã cài • {version_line} • đường dẫn {path} • tessdata {tessdata_text}"
-            except Exception as exc:
-                message = f"Tesseract dự phòng: tìm thấy tại {path} nhưng không đọc được phiên bản ({exc})."
+                message = f"Đã cài • {version_line}"
+            except Exception:
+                message = "Đã tìm thấy Tesseract nhưng chưa đọc được phiên bản."
             self.event_queue.put(("tesseract_status", message))
 
         threading.Thread(target=worker, name="check_vehicle_tesseract_status", daemon=True).start()
+
+    def check_tesseract_package(self) -> None:
+        """Check a configured verified package in the background, without download."""
+        manifest_url = self.tesseract_manifest_url_var.get().strip()
+        if not manifest_url:
+            self.refresh_tesseract_status()
+            return
+        self.tesseract_status_var.set("Đang kiểm tra Tesseract dự phòng ở nền…")
+
+        def worker() -> None:
+            try:
+                manifest = fetch_tesseract_manifest(manifest_url)
+            except Exception:
+                self.event_queue.put(("tesseract_manifest_error", "Không đọc được nguồn gói Tesseract đã xác minh. Bản hiện tại không thay đổi."))
+            else:
+                self.event_queue.put(("tesseract_manifest", manifest))
+
+        threading.Thread(target=worker, name="check_vehicle_tesseract_manifest", daemon=True).start()
 
     def _notify(self, message: str, level: str = "info") -> None:
         self.ui_state.notify(message, level)
@@ -1671,10 +2020,6 @@ class CheckVehicleApp(tk.Tk):
     def _sync_local_ocr_control(self) -> None:
         self.local_ocr_workers_var.set(1)
         self.local_ocr_hint_var.set("PaddleOCR cục bộ dùng một lượt nhận diện để đảm bảo ổn định; xử lý ảnh vẫn có thể chạy song song.")
-        for control_name in ("local_ocr_workers_spin", "local_ocr_workers_advanced_spin"):
-            control = getattr(self, control_name, None)
-            if control is not None:
-                control.configure(state="disabled")
         self._update_advanced_worker_summary()
 
     def save_detail_edits(self) -> None:
@@ -2345,6 +2690,7 @@ class CheckVehicleApp(tk.Tk):
             self.gemini_model_var,
             self.plate_recognizer_region_var,
             self.tesseract_var,
+            self.tesseract_previous_path_var,
             self.tesseract_fallback_enabled_var,
             self.recursive_var,
             self.blur_threshold_var,
@@ -2376,9 +2722,13 @@ class CheckVehicleApp(tk.Tk):
             self.telegram_progress_step_var,
             self.telegram_min_interval_var,
             self.telegram_mask_plate_var,
+            self.update_source_mode_var,
+            self.github_repository_var,
             self.update_manifest_url_var,
             self.paddle_release_source_var,
+            self.paddle_candidate_version_var,
             self.model_manifest_url_var,
+            self.tesseract_manifest_url_var,
         ):
             variable.trace_add("write", lambda *_args: self._schedule_settings_save())
         for variable in (
@@ -2419,9 +2769,21 @@ class CheckVehicleApp(tk.Tk):
         self._save_after_id = self.after(700, self._save_settings)
 
     def _save_settings(self) -> None:
+        pending_save = self._save_after_id
         self._save_after_id = None
+        if pending_save:
+            try:
+                self.after_cancel(pending_save)
+            except tk.TclError:
+                pass
         try:
             output_dir = str(Path(self.output_dir_var.get() or _default_output_dir()).expanduser())
+            manifest_url = self.update_manifest_url_var.get().strip()
+            source_mode = self._update_source_mode_key()
+            if is_test_update_sentinel(manifest_url):
+                manifest_url = ""
+                if source_mode == "manifest":
+                    source_mode = "disabled"
             payload = {
                 "version": SETTINGS_VERSION,
                 "engine": self.engine_var.get(),
@@ -2431,6 +2793,7 @@ class CheckVehicleApp(tk.Tk):
                 "gemini_model": self.gemini_model_var.get().strip() or DEFAULT_GEMINI_MODEL,
                 "plate_recognizer_region": self.plate_recognizer_region_var.get().strip() or DEFAULT_PLATE_RECOGNIZER_REGION,
                 "tesseract_path": self.tesseract_var.get().strip(),
+                "tesseract_previous_path": self.tesseract_previous_path_var.get().strip(),
                 "tesseract_fallback_enabled": bool(self.tesseract_fallback_enabled_var.get()),
                 "recursive": bool(self.recursive_var.get()),
                 "blur_threshold": float(self.blur_threshold_var.get()),
@@ -2460,9 +2823,13 @@ class CheckVehicleApp(tk.Tk):
                     "mask_plate_number": bool(self.telegram_mask_plate_var.get()),
                 },
                 "updates": {
-                    "manifest_url": self.update_manifest_url_var.get().strip(),
+                    "source_mode": source_mode,
+                    "github_repository": self.github_repository_var.get().strip(),
+                    "manifest_url": manifest_url,
                     "paddle_release_source": self.paddle_release_source_var.get().strip(),
+                    "paddle_candidate_version": self.paddle_candidate_version_var.get().strip(),
                     "model_manifest_url": self.model_manifest_url_var.get().strip(),
+                    "tesseract_manifest_url": self.tesseract_manifest_url_var.get().strip(),
                     "channel": "stable",
                     "auto_install": False,
                 },
@@ -2518,6 +2885,13 @@ class CheckVehicleApp(tk.Tk):
         self._save_after_id = None
         self._drain_after_id = None
         self._layout_after_ids.clear()
+        # ttk posts a ThemeChanged virtual event at idle after style changes.
+        # Drain that event while widgets still exist so closing immediately
+        # after switching light/dark mode cannot emit a Tcl callback error.
+        try:
+            self.update_idletasks()
+        except tk.TclError:
+            pass
         super().destroy()
 
     def _log(self, message: str) -> None:
@@ -2782,7 +3156,6 @@ def _theme_colors(dark_mode: bool) -> dict[str, str]:
             "button": palette["surface"],
             "button_hover": palette["surface_hover"],
             "disabled": palette["border"],
-            "disabled_text": palette["text_muted"],
             "preview_bg": palette["preview"],
             "log_bg": palette["surface"],
             "tree_bg": palette["surface"],

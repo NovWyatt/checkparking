@@ -11,7 +11,22 @@ from typing import Any
 
 APP_DIR_NAME = "CheckVehicleOCR"
 SETTINGS_FILE = "settings.json"
-SETTINGS_VERSION = 12
+SETTINGS_VERSION = 14
+
+# These values were used only by early UI tests.  They must never behave as a
+# release source in a real operator profile.  Keep this exact, small list: a
+# legitimate ``file:///...`` manifest selected by an operator is supported.
+_TEST_UPDATE_SENTINELS = frozenset({"file:///mock", "file:///mock-manifest.json"})
+
+
+def is_test_update_sentinel(value: object) -> bool:
+    """Return whether *value* is one of the old, test-only update URLs.
+
+    This intentionally compares the complete value.  Operators are still free
+    to use a real local ``file:///...`` manifest when that is their chosen
+    update source.
+    """
+    return str(value or "").strip() in _TEST_UPDATE_SENTINELS
 
 
 def settings_path() -> Path:
@@ -34,7 +49,16 @@ def load_settings() -> dict[str, Any]:
     if not isinstance(data, dict):
         return {}
 
+    original_data = deepcopy(data)
     data = migrate_settings(data)
+    if data != original_data:
+        # Persist only the raw, still-protected migration result.  This removes
+        # old test sentinels before the Update Center can attempt to open them
+        # and never serializes decrypted API keys.
+        try:
+            path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        except OSError:
+            pass
 
     protected_fields = {
         "api_key": "api_key_dpapi",
@@ -51,7 +75,7 @@ def load_settings() -> dict[str, Any]:
 def migrate_settings(data: dict[str, Any]) -> dict[str, Any]:
     """Add safe defaults without discarding existing user settings."""
     migrated = dict(data)
-    migrated.setdefault("version", SETTINGS_VERSION)
+    migrated["version"] = SETTINGS_VERSION
     migrated.setdefault("worker_mode", "AUTO")
     migrated.setdefault("image_workers", 0)
     migrated.setdefault("local_ocr_workers", 1)
@@ -66,8 +90,25 @@ def migrate_settings(data: dict[str, Any]) -> dict[str, Any]:
     migrated.setdefault("updates", {"manifest_url": "", "channel": "stable", "auto_install": False})
     if not isinstance(migrated["updates"], dict):
         migrated["updates"] = {"manifest_url": "", "channel": "stable", "auto_install": False}
-    migrated["updates"].setdefault("paddle_release_source", "https://pypi.org/pypi/paddleocr/json")
-    migrated["updates"].setdefault("model_manifest_url", "")
+    updates = migrated["updates"]
+    manifest_url = str(updates.get("manifest_url") or "").strip()
+    removed_test_manifest = is_test_update_sentinel(manifest_url)
+    if removed_test_manifest:
+        updates["manifest_url"] = ""
+    updates.setdefault("source_mode", "disabled")
+    if updates["source_mode"] not in {"disabled", "github", "manifest"}:
+        updates["source_mode"] = "manifest" if updates.get("manifest_url") else "disabled"
+    # Previous screenshot tests could persist ``file:///mock`` while leaving
+    # the mode set to ``manifest``.  Disable that exact stale configuration so
+    # the operator sees a neutral setup prompt instead of a WinError.  Do not
+    # change a legitimate local manifest URL.
+    if removed_test_manifest and updates["source_mode"] == "manifest":
+        updates["source_mode"] = "disabled"
+    updates.setdefault("github_repository", "")
+    updates.setdefault("paddle_release_source", "https://pypi.org/pypi/paddleocr/json")
+    updates.setdefault("paddle_candidate_version", "")
+    updates.setdefault("model_manifest_url", "")
+    updates.setdefault("tesseract_manifest_url", "")
     engine = str(migrated.get("engine") or "PaddleOCR Local")
     recognition_mode = str(migrated.get("recognition_mode") or "").strip()
     if recognition_mode not in {"local", "local_ai_review", "online"}:

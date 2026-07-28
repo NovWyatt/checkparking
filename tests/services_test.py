@@ -69,8 +69,7 @@ def main() -> int:
     content = b"verified update"
     manifest = parse_manifest(json.dumps({"version":"1.2.3", "release_notes":"test", "download_url":"https://update.example/file", "sha256":hashlib.sha256(content).hexdigest()}))
     with tempfile.TemporaryDirectory() as temporary:
-        with patch("urllib.request.urlopen", return_value=Response(content)):
-            downloaded = download_verified(manifest, Path(temporary))
+        downloaded = download_verified(manifest, Path(temporary), opener=lambda *_args, **_kwargs: Response(content))
         assert downloaded.read_bytes() == content
     print("services_test OK")
     return 0

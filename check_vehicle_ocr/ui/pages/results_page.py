@@ -56,6 +56,7 @@ class ResultsPage(Page):
             values=("Tất cả", "Cần kiểm tra", "Có lỗi"),
             width=15,
             state="readonly",
+            style="Operator.TCombobox",
         )
         controller.result_filter_combo.grid(row=0, column=1, padx=(8, 4))
         controller.result_filter_combo.bind("<<ComboboxSelected>>", lambda _event: controller.refresh_result_tables())

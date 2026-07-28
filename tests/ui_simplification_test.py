@@ -14,6 +14,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from check_vehicle_ocr.app import CheckVehicleApp, PERFORMANCE_PRESET_LABELS
 from check_vehicle_ocr.config import migrate_settings
+from check_vehicle_ocr.runtime_manager import RuntimeStagingReport
 from check_vehicle_ocr.update_center import PaddleRelease
 
 
@@ -90,8 +91,10 @@ def main() -> int:
             assert "9.9.9" in app.paddle_update_status_var.get()
             assert "mock://notes" in app.paddle_release_notes_var.get()
             assert str(app.paddle_stage_button.cget("state")) == "normal"
-            app.prepare_paddle_staging()
-            assert "môi trường thử nghiệm" in app.paddle_update_status_var.get()
+            staged = RuntimeStagingReport("9.9.9", Path(appdata) / "stage", True, "PaddleOCR 9.9.9 đã qua import, OCR synthetic, normalization và Excel smoke.", ())
+            with patch.object(app.paddle_runtime_manager, "stage_and_test", return_value=staged):
+                app.prepare_paddle_staging()
+                _pump(app, lambda: "đã qua import" in app.paddle_update_status_var.get())
 
             app.event_generate("<Control-comma>")
             app.update_idletasks()
