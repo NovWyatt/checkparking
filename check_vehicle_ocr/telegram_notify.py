@@ -27,13 +27,17 @@ class TelegramNotifier:
     def __init__(self, settings: TelegramSettings, timeout: float = 12.0):
         self.settings = settings
         self.timeout = timeout
-        self.last_sent_at = 0.0
+        # ``time.monotonic()`` can be lower than a configured interval on a
+        # freshly booted machine or CI runner.  ``None`` distinguishes “never
+        # sent” from an actual delivery timestamp so the first operator/test
+        # notification is never rate-limited by mistake.
+        self.last_sent_at: float | None = None
         self.last_error = ""
 
     def send(self, text: str, *, force: bool = False) -> bool:
         if not self.settings.enabled or not self.settings.bot_token or not self.settings.chat_id:
             return False
-        if not force and time.monotonic() - self.last_sent_at < self.settings.minimum_interval_seconds:
+        if not force and self.last_sent_at is not None and time.monotonic() - self.last_sent_at < self.settings.minimum_interval_seconds:
             return False
         body = json.dumps({"chat_id": self.settings.chat_id, "text": text}).encode("utf-8")
         request = urllib.request.Request(

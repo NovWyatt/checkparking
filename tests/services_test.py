@@ -67,7 +67,7 @@ def main() -> int:
 
         phase = "telegram mock"
         notifier = TelegramNotifier(TelegramSettings(enabled=True, bot_token="token", chat_id="123", minimum_interval_seconds=3600))
-        with patch("urllib.request.urlopen", return_value=Response(b'{"ok":true}')):
+        with patch("urllib.request.urlopen", return_value=Response(b'{"ok":true}')), patch("check_vehicle_ocr.telegram_notify.time.monotonic", return_value=1.0):
             assert notifier.send("test") and not notifier.send("suppressed")
         assert mask_plate("30A-123.45") == "30***45"
 

@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.7.2 — Telegram first-notification rate-limit fix
+
+- Fixed an edge case on freshly booted machines where the first Telegram
+  notification could be treated as if it had already been rate-limited.
+
 ## 1.7.1 — Packaged GitHub Releases default
 
 - Fresh packaged profiles now use the repository embedded in build metadata as
