@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import StrEnum
 from pathlib import Path
 
 from .plate_formatting import (
@@ -12,6 +13,20 @@ from .plate_formatting import (
     format_plate,
     reformat_manual_correction,
 )
+
+
+class ExpectedPlateCount(StrEnum):
+    """Operator intent captured once for a batch, never inferred from OCR."""
+
+    ONE = "ONE"
+    MULTIPLE = "MULTIPLE"
+
+
+def coerce_expected_plate_count(value: ExpectedPlateCount | str | None) -> ExpectedPlateCount:
+    try:
+        return ExpectedPlateCount(str(value or ExpectedPlateCount.ONE).strip().upper())
+    except ValueError:
+        return ExpectedPlateCount.ONE
 
 
 @dataclass
@@ -62,6 +77,10 @@ class PlateCandidate:
     tesseract_confidence: float = 0.0
     selected_engine: str = ""
     selection_reason: str = ""
+    detector_confidence: float = 0.0
+    selection_score: float = 0.0
+    candidate_status: str = ""
+    rejected_reason: str = ""
 
     @property
     def final_text(self) -> str:
@@ -128,10 +147,20 @@ class ImageResult:
     selected_plate_type: PlateType = PlateType.NONE
     batch_started_at: str = ""
     batch_total_images: int = 0
+    expected_plate_count: ExpectedPlateCount = ExpectedPlateCount.ONE
+    rejected_candidates: list[PlateCandidate] = field(default_factory=list)
+    pipeline_metrics: dict[str, int | float | str] = field(default_factory=dict)
+    selected_candidate_reason: str = ""
 
     @property
     def plate_texts(self) -> list[str]:
         return [plate.final_text for plate in self.plates if (plate.readable or plate.review_approved) and plate.final_text]
+
+    @property
+    def primary_plate(self) -> PlateCandidate | None:
+        """The only operator-facing plate when the batch expects one plate."""
+
+        return self.plates[0] if self.plates else None
 
 
 @dataclass(frozen=True)
@@ -142,3 +171,4 @@ class BatchSession:
     selected_plate_type: PlateType
     started_at: str
     total_images: int
+    expected_plate_count: ExpectedPlateCount = ExpectedPlateCount.ONE

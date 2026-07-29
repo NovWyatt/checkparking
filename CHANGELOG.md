@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.9.1 — Sửa nhận nhầm chữ trên ảnh thành biển số
+
+- Mặc định mỗi ảnh chỉ xuất một biển số primary; lựa chọn nhiều biển chỉ giữ các vùng biển vật lý khác nhau do detector tìm thấy.
+- FAST và Cân bằng chuyển sang detector-first, OCR crop giới hạn và early exit; không còn OCR toàn cảnh sau khi đã có biển rõ.
+- Lọc timestamp, watermark, địa chỉ và text overlay bằng điều kiện plate-like; nhiễu bị lưu debug là `REJECTED_NOISE`, không xuất Excel hoặc sheet `Bien_so_dac_biet`.
+- Tesseract chỉ nhận crop detector, còn AI hybrid chỉ nhận ảnh mà primary plate thật sự cần review.
+- Thêm thống kê detector/OCR/fallback, phần chẩn đoán candidate ẩn mặc định và regression gate 18 ảnh/18 primary plates.
+
 ## 1.9.0 — OCR runtime đã kiểm thử và Tesseract cài một chạm
 
 - Nâng runtime đóng gói lên PaddleOCR 3.7.0, PaddlePaddle 3.3.1 và PaddleX 3.7.2.

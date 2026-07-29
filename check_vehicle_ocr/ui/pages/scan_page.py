@@ -53,13 +53,28 @@ class ScanPage(Page):
         ttk.Label(inputs, textvariable=controller.plate_type_hint_var, style="SurfaceMuted.TLabel", wraplength=440).grid(
             row=4, column=0, columnspan=2, sticky="w", pady=(1, 2)
         )
+        self.expected_plate_count_combo = labelled_combo(
+            inputs,
+            5,
+            "Số biển số dự kiến trong mỗi ảnh",
+            controller.expected_plate_count_var,
+            controller.expected_plate_count_choices,
+            readonly=True,
+        )
+        attach_tooltip(
+            self.expected_plate_count_combo,
+            "Mặc định chỉ xuất một biển số tốt nhất cho mỗi ảnh; chữ overlay và candidate phụ không làm tăng tổng biển số.",
+        )
+        ttk.Label(inputs, textvariable=controller.expected_plate_count_hint_var, style="SurfaceMuted.TLabel", wraplength=440).grid(
+            row=6, column=0, columnspan=2, sticky="w", pady=(1, 2)
+        )
         ttk.Label(
             inputs,
             text="Ứng dụng sẽ tự thêm dấu gạch cho các biển số đúng mẫu. Biển đặc biệt sẽ được giữ nguyên để kiểm tra.",
             style="SurfaceMuted.TLabel",
             wraplength=440,
-        ).grid(row=5, column=0, columnspan=2, sticky="w", pady=(2, 2))
-        ttk.Button(inputs, text="Xóa danh sách", command=controller.clear_all).grid(row=6, column=1, sticky="e", pady=(6, 0))
+        ).grid(row=7, column=0, columnspan=2, sticky="w", pady=(2, 2))
+        ttk.Button(inputs, text="Xóa danh sách", command=controller.clear_all).grid(row=8, column=1, sticky="e", pady=(6, 0))
 
     def _build_recognition_step(self, controller) -> None:
         settings = ttk.LabelFrame(self.content, text="Bước 2 — Chọn cách nhận diện", style="Card.TLabelframe")

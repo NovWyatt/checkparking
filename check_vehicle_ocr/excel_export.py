@@ -355,10 +355,8 @@ def _write_review(sheet, results: list[ImageResult], blur_threshold: float, revi
         for plate in plates:
             needs_review = (
                 result.status != "OK"
-                or result.blur_score < blur_threshold
-                or bool(result.warnings)
                 or (reviewed and (plate is None or not plate.review_approved))
-                or (plate is not None and not plate.readable and not plate.review_approved)
+                or (plate is not None and (plate.needs_review or (not plate.readable and not plate.review_approved)))
             )
             if not needs_review:
                 continue
@@ -526,7 +524,7 @@ def _detected_format_value(value: DetectedPlateFormat | str | None) -> str:
 
 def _is_special_plate(plate: PlateCandidate) -> bool:
     return (
-        _format_status_value(plate.format_status) == PlateFormatStatus.UNMATCHED.value
+        _format_status_value(plate.format_status) == PlateFormatStatus.SPECIAL_OR_UNKNOWN.value
         or _detected_format_value(plate.detected_format) == DetectedPlateFormat.SPECIAL_OR_UNKNOWN.value
     )
 

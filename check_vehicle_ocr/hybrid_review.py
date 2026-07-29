@@ -67,6 +67,6 @@ def should_send_to_ai(
         suggestions = {value.strip().upper() for value in plate.suggested_texts if value.strip()}
         if len(suggestions) > 1 or plate.ambiguity_flags:
             return True, "Có nhiều kết quả OCR mâu thuẫn."
-    if result.status != "OK" or result.warnings:
-        return True, "PaddleOCR trả về cảnh báo cần kiểm tra."
+    if result.status != "OK":
+        return True, "PaddleOCR chưa hoàn tất nhận diện."
     return False, "PaddleOCR đọc rõ với độ tin cậy cao."

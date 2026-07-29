@@ -211,6 +211,17 @@ class SettingsPage(Page):
         labelled_spin(workers, 5, "Ngưỡng tin cậy", controller.conf_threshold_var, 10, 95, 5)
         labelled_spin(workers, 6, "Ngưỡng ảnh mờ", controller.blur_threshold_var, 10, 500, 5)
         labelled_entry(workers, 7, "Nguồn manifest model", controller.model_manifest_url_var)
+        labelled_combo(
+            workers,
+            8,
+            "Ảnh thường có bao nhiêu biển số?",
+            controller.expected_plate_count_var,
+            controller.expected_plate_count_choices,
+            readonly=True,
+        )
+        ttk.Label(workers, textvariable=controller.expected_plate_count_hint_var, style="SurfaceMuted.TLabel", wraplength=760).grid(
+            row=9, column=0, columnspan=2, sticky="w", pady=(2, 0)
+        )
 
         fallback = self._card(parent, "OCR dự phòng — Tesseract")
         ttk.Checkbutton(fallback, text="Dùng Tesseract dự phòng khi PaddleOCR không chắc chắn", variable=controller.tesseract_fallback_enabled_var).grid(

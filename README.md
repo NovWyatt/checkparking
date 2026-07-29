@@ -12,10 +12,10 @@ Tool desktop Python de import hang loat anh xe, nhan dien bien so bang OCR va xu
   - `Plate Recognizer`: API chuyen doc bien so xe, mac dinh region `vn`, nen uu tien cho bai toan bai xe/nhieu xe.
   - `GPT Vision`: gui anh da resize/nen len OpenAI de doc bien so.
   - `Local OCR`: xu ly local bang OpenCV + Tesseract, dung khi khong co API key.
-- `PaddleOCR Local` trong bản phát hành 1.9.0 dùng PP-OCRv6 Small đã bundle; chế độ tiết kiệm tài nguyên dùng PP-OCRv6 Tiny. PP-OCRv5 Mobile vẫn được giữ trong registry để quay lại khi cần.
+- `PaddleOCR Local` trong bản phát hành 1.9.1 dùng PP-OCRv6 Small đã bundle; chế độ tiết kiệm tài nguyên dùng PP-OCRv6 Tiny. PP-OCRv5 Mobile vẫn được giữ trong registry để quay lại khi cần.
 - `PaddleOCR Local` co them ONNX license-plate detector `yolo-v9-t-384-license-plate-end2end` de tim dung box bien so truoc khi OCR; model nhe, chay CPU local, giup anh nhieu xe it sot bien hon ma khong phu thuoc API.
-- Khi dung PaddleOCR, app tach cac dong OCR gan nhau thanh tung bien so rieng de mot anh co the tra ve nhieu bien so, dong thoi loc time mark/timestamp nhu `26 Thang 5, 2026`, ngay gio, watermark camera.
-- Pipeline PaddleOCR uu tien toc do: `Nhanh` va `Can bang` uu tien luong Paddle nhe, chi dung ONNX khi can cuu anh fail; `Quet ky` moi bat ONNX ngay tu dau de bat nhieu xe hon.
+- Khi dùng PaddleOCR, ứng dụng ưu tiên detector vùng biển trước OCR. Mặc định batch xuất một biển số tốt nhất mỗi ảnh; chỉ chế độ nhiều biển mới giữ các bbox biển vật lý riêng biệt.
+- Pipeline PaddleOCR ưu tiên tốc độ và tránh text overlay: `Nhanh` OCR tối đa hai crop detector, `Cân bằng` tối đa ba crop và chỉ fallback khi crop không tạo candidate hợp lệ; `Kỹ` được thử thêm fallback có giới hạn.
 - Anh fail nhung van net se tu chay rescue pass: doc lai khong che timestamp va quet them cac o focus de bat bien so nam lech goc, bi time mark che mot phan, hoac co nhieu xe trong anh.
 - `GPT Vision` dung OpenAI Responses API voi model mac dinh `gpt-4.1` de nhanh va on dinh hon; app co retry/fallback model neu model chinh khong kha dung.
 - `Gemini Vision` dung model mac dinh `gemini-2.5-flash`, ep JSON schema, gui anh goc kem crop nghi bien so, va fallback sang cac model Gemini khac neu model chinh khong kha dung.

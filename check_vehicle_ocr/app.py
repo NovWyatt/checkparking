@@ -27,7 +27,13 @@ from .gpt_vision import DEFAULT_GPT_MODEL, GPT_MODEL_CHOICES, GptVisionEngine
 from .image_io import collect_images, load_image
 from .hybrid_review import AiReviewPolicy, coerce_ai_review_policy, result_has_readable_plate, should_send_to_ai
 from .candidate_scoring import apply_fallback_selection
-from .models import BatchSession, ImageResult, PlateCandidate
+from .models import (
+    BatchSession,
+    ExpectedPlateCount,
+    ImageResult,
+    PlateCandidate,
+    coerce_expected_plate_count,
+)
 from .ocr import TesseractOcrEngine, find_tesseract
 from .paddle_ocr_engine import PaddleOcrEngine, current_model_selection
 from .plate_recognizer import DEFAULT_PLATE_RECOGNIZER_REGION, PlateRecognizerEngine
@@ -166,11 +172,20 @@ PLATE_TYPE_DESCRIPTIONS = {
     PlateType.CAR: "Tự định dạng thành dạng 59X-12345.",
     PlateType.NONE: "Giữ nguyên kết quả OCR và đưa biển đặc biệt vào danh sách kiểm tra.",
 }
+EXPECTED_PLATE_COUNT_LABELS = {
+    ExpectedPlateCount.ONE: "Một biển số — Khuyên dùng",
+    ExpectedPlateCount.MULTIPLE: "Có thể có nhiều biển số",
+}
+EXPECTED_PLATE_COUNT_DESCRIPTIONS = {
+    ExpectedPlateCount.ONE: "Mỗi ảnh chỉ xuất một biển số tốt nhất; chữ, watermark và candidate phụ chỉ lưu để chẩn đoán.",
+    ExpectedPlateCount.MULTIPLE: "Chỉ xuất nhiều biển khi detector tìm thấy các vùng biển vật lý khác nhau.",
+}
 PLATE_FORMAT_STATUS_LABELS = {
     PlateFormatStatus.FORMATTED: "Đã định dạng",
-    PlateFormatStatus.UNMATCHED: "Biển đặc biệt",
+    PlateFormatStatus.SPECIAL_OR_UNKNOWN: "Biển đặc biệt",
     PlateFormatStatus.MANUAL: "Đã sửa tay",
     PlateFormatStatus.DISABLED: "Giữ nguyên",
+    PlateFormatStatus.REJECTED_NOISE: "Đã loại nhiễu",
 }
 UPDATE_SOURCE_LABELS = {
     "disabled": "Tắt cập nhật",
@@ -214,7 +229,6 @@ def _result_has_readable_plate(result: ImageResult) -> bool:
 def _needs_online_review(result: ImageResult) -> bool:
     return (
         result.status != "OK"
-        or bool(result.warnings)
         or not _result_has_readable_plate(result)
         or any(plate.needs_review for plate in result.plates)
     )
@@ -403,6 +417,10 @@ class CheckVehicleApp(tk.Tk):
         saved_plate_type = coerce_plate_type(self.settings.get("last_plate_type"))
         self.plate_type_choices = tuple(PLATE_TYPE_LABELS.values())
         self.plate_type_var = tk.StringVar(value=PLATE_TYPE_LABELS[saved_plate_type])
+        saved_expected_plate_count = coerce_expected_plate_count(self.settings.get("last_expected_plate_count"))
+        self.expected_plate_count_choices = tuple(EXPECTED_PLATE_COUNT_LABELS.values())
+        self.expected_plate_count_var = tk.StringVar(value=EXPECTED_PLATE_COUNT_LABELS[saved_expected_plate_count])
+        self.expected_plate_count_hint_var = tk.StringVar()
         saved_ai_review_policy = coerce_ai_review_policy(self.settings.get("ai_review_policy"))
         self.ai_review_policy_choices = tuple(AI_REVIEW_POLICY_LABELS.values())
         self.ai_review_policy_var = tk.StringVar(value=AI_REVIEW_POLICY_LABELS[saved_ai_review_policy])
@@ -489,6 +507,7 @@ class CheckVehicleApp(tk.Tk):
         self.performance_preset_var.trace_add("write", lambda *_args: self._on_performance_preset_changed())
         self.paddle_scan_mode_var.trace_add("write", lambda *_args: self._update_scan_mode_hint())
         self.plate_type_var.trace_add("write", lambda *_args: self._on_plate_type_changed())
+        self.expected_plate_count_var.trace_add("write", lambda *_args: self._on_expected_plate_count_changed())
         self.ai_review_policy_var.trace_add("write", lambda *_args: self._on_ai_review_policy_changed())
         self.gpt_model_var.trace_add("write", lambda *_args: self._update_header_status())
         self.gemini_model_var.trace_add("write", lambda *_args: self._update_header_status())
@@ -497,6 +516,7 @@ class CheckVehicleApp(tk.Tk):
         self._on_recognition_mode_changed()
         self._update_scan_mode_hint()
         self._on_plate_type_changed()
+        self._on_expected_plate_count_changed()
         self._on_ai_review_policy_changed()
         self._update_header_status()
         self._sync_local_ocr_control()
@@ -533,11 +553,15 @@ class CheckVehicleApp(tk.Tk):
         try:
             scan = self.shell.pages.get("scan")
             combo = getattr(scan, "plate_type_combo", None)
+            expected_combo = getattr(scan, "expected_plate_count_combo", None)
             values = list(combo.cget("values")) if combo is not None else []
+            expected_values = list(expected_combo.cget("values")) if expected_combo is not None else []
             payload = {
                 "version": __version__,
                 "plate_type_label": "Loại biển số",
                 "plate_type_values": values,
+                "expected_plate_count_label": "Số biển số dự kiến trong mỗi ảnh",
+                "expected_plate_count_values": expected_values,
                 "update_source_mode": self._update_source_mode_key(),
                 "github_repository": self.github_repository_var.get().strip(),
                 "update_primary_action": self.update_check_button.cget("text") if self.update_check_button else "",
@@ -1050,6 +1074,7 @@ class CheckVehicleApp(tk.Tk):
                 selected_plate_type=self._selected_plate_type(),
                 started_at=datetime.now().astimezone().isoformat(timespec="seconds"),
                 total_images=len(target_images),
+                expected_plate_count=self._selected_expected_plate_count(),
             )
             self.current_batch_session = batch_session
         else:
@@ -1059,6 +1084,7 @@ class CheckVehicleApp(tk.Tk):
                 selected_plate_type=self._selected_plate_type(),
                 started_at=datetime.now().astimezone().isoformat(timespec="seconds"),
                 total_images=len(target_images),
+                expected_plate_count=self._selected_expected_plate_count(),
             )
             self.current_batch_session = batch_session
         self.progress.configure(maximum=len(target_images), value=0)
@@ -1223,6 +1249,7 @@ class CheckVehicleApp(tk.Tk):
                     image_size=image_size,
                     tesseract_fallback_enabled=tesseract_fallback_enabled,
                     selected_plate_type=batch_session.selected_plate_type if batch_session else PlateType.NONE,
+                    expected_plate_count=batch_session.expected_plate_count if batch_session else ExpectedPlateCount.ONE,
                 )
 
             def on_started(item: WorkItem[Path], pool: str) -> None:
@@ -1341,6 +1368,8 @@ class CheckVehicleApp(tk.Tk):
                 paddle_scan_mode=paddle_scan_mode,
                 image_bgr=image_bgr,
                 image_size=image_size,
+                selected_plate_type=batch_session.selected_plate_type if batch_session else PlateType.NONE,
+                expected_plate_count=batch_session.expected_plate_count if batch_session else ExpectedPlateCount.ONE,
             )
             return _run_tesseract_fallback_if_needed(
                 local_result,
@@ -1351,6 +1380,7 @@ class CheckVehicleApp(tk.Tk):
                 blur_threshold,
                 confidence_threshold,
                 batch_session.selected_plate_type if batch_session else PlateType.NONE,
+                batch_session.expected_plate_count if batch_session else ExpectedPlateCount.ONE,
                 image_bgr=image_bgr,
                 image_size=image_size,
             )
@@ -1404,6 +1434,7 @@ class CheckVehicleApp(tk.Tk):
 
             def api_infer(candidate: tuple[int, ImageResult, str]):
                 index, local_result, _reason = candidate
+                local_result.pipeline_metrics["ai_calls"] = int(local_result.pipeline_metrics.get("ai_calls", 0)) + 1
                 return index, local_result, engine.online_engine.analyze_image(local_result.image_path, blur_threshold)
 
             def on_ai_started(item: WorkItem[tuple[int, ImageResult, str]], _pool: str) -> None:
@@ -1510,6 +1541,7 @@ class CheckVehicleApp(tk.Tk):
         image_size: tuple[int, int] | None = None,
         tesseract_fallback_enabled: bool = False,
         selected_plate_type: PlateType = PlateType.NONE,
+        expected_plate_count: ExpectedPlateCount = ExpectedPlateCount.ONE,
     ) -> ImageResult:
         _ = index
         if engine_mode == "GPT Vision":
@@ -1519,7 +1551,15 @@ class CheckVehicleApp(tk.Tk):
             if tesseract_fallback_enabled and _needs_local_fallback(gemini_result):
                 local_engine = TesseractOcrEngine(tesseract_path, confidence_threshold)
                 if local_engine.available:
-                    local_result = process_image(image, crop_dir, local_engine, blur_threshold, max(20.0, confidence_threshold - 10.0))
+                    local_result = process_image(
+                        image,
+                        crop_dir,
+                        local_engine,
+                        blur_threshold,
+                        max(20.0, confidence_threshold - 10.0),
+                        selected_plate_type=selected_plate_type,
+                        expected_plate_count=expected_plate_count,
+                    )
                     return _merge_gemini_local_result(gemini_result, local_result)
                 gemini_result.warnings.append(f"Không dùng được Tesseract dự phòng: {local_engine.reason}")
             return gemini_result
@@ -1535,6 +1575,8 @@ class CheckVehicleApp(tk.Tk):
                 paddle_scan_mode=paddle_scan_mode,
                 image_bgr=image_bgr,
                 image_size=image_size,
+                selected_plate_type=selected_plate_type,
+                expected_plate_count=expected_plate_count,
             )
             return _run_tesseract_fallback_if_needed(
                 local_result,
@@ -1545,6 +1587,7 @@ class CheckVehicleApp(tk.Tk):
                 blur_threshold,
                 confidence_threshold,
                 selected_plate_type,
+                expected_plate_count,
                 image_bgr=image_bgr,
                 image_size=image_size,
             )
@@ -1558,6 +1601,8 @@ class CheckVehicleApp(tk.Tk):
                 paddle_scan_mode=paddle_scan_mode,
                 image_bgr=image_bgr,
                 image_size=image_size,
+                selected_plate_type=selected_plate_type,
+                expected_plate_count=expected_plate_count,
             )
             if not _needs_online_review(local_result):
                 return local_result
@@ -1567,7 +1612,17 @@ class CheckVehicleApp(tk.Tk):
                 return online_result
             local_result.warnings.append("AI trực tuyến không xác nhận được thêm kết quả; giữ OCR cục bộ để kiểm tra.")
             return local_result
-        return process_image(image, crop_dir, engine, blur_threshold, confidence_threshold, image_bgr=image_bgr, image_size=image_size)
+        return process_image(
+            image,
+            crop_dir,
+            engine,
+            blur_threshold,
+            confidence_threshold,
+            image_bgr=image_bgr,
+            image_size=image_size,
+            selected_plate_type=selected_plate_type,
+            expected_plate_count=expected_plate_count,
+        )
 
     def _drain_events(self) -> None:
         try:
@@ -1997,10 +2052,21 @@ class CheckVehicleApp(tk.Tk):
                 return plate_type
         return PlateType.NONE
 
+    def _selected_expected_plate_count(self) -> ExpectedPlateCount:
+        selected_label = self.expected_plate_count_var.get().strip()
+        for expected_count, label in EXPECTED_PLATE_COUNT_LABELS.items():
+            if selected_label == label:
+                return expected_count
+        return ExpectedPlateCount.ONE
+
     def _on_plate_type_changed(self) -> None:
         plate_type = self._selected_plate_type()
         self.plate_type_hint_var.set(PLATE_TYPE_DESCRIPTIONS[plate_type])
         self._update_reformat_action()
+
+    def _on_expected_plate_count_changed(self) -> None:
+        expected_count = self._selected_expected_plate_count()
+        self.expected_plate_count_hint_var.set(EXPECTED_PLATE_COUNT_DESCRIPTIONS[expected_count])
 
     def _apply_batch_formatting(self, result: ImageResult, batch_session: BatchSession) -> None:
         """Attach immutable batch metadata and formatter output after OCR."""
@@ -2009,6 +2075,7 @@ class CheckVehicleApp(tk.Tk):
         result.selected_plate_type = batch_session.selected_plate_type
         result.batch_started_at = batch_session.started_at
         result.batch_total_images = batch_session.total_images
+        result.expected_plate_count = batch_session.expected_plate_count
         for plate in result.plates:
             plate.apply_plate_formatting(batch_session.selected_plate_type)
 
@@ -2048,6 +2115,7 @@ class CheckVehicleApp(tk.Tk):
             selected_plate_type=selected_type,
             started_at=datetime.now().astimezone().isoformat(timespec="seconds"),
             total_images=len(self.results),
+            expected_plate_count=self._selected_expected_plate_count(),
         )
         for result in self.results:
             batch_session = BatchSession(
@@ -2055,6 +2123,7 @@ class CheckVehicleApp(tk.Tk):
                 selected_plate_type=selected_type,
                 started_at=result.batch_started_at or fallback_session.started_at,
                 total_images=result.batch_total_images or fallback_session.total_images,
+                expected_plate_count=result.expected_plate_count,
             )
             self._apply_batch_formatting(result, batch_session)
         self.current_batch_session = BatchSession(
@@ -2062,6 +2131,7 @@ class CheckVehicleApp(tk.Tk):
             selected_plate_type=selected_type,
             started_at=fallback_session.started_at,
             total_images=fallback_session.total_images,
+            expected_plate_count=fallback_session.expected_plate_count,
         )
         self._refresh_table()
         self.status_var.set("Đã áp dụng lại định dạng, không chạy lại OCR.")
@@ -3006,7 +3076,9 @@ class CheckVehicleApp(tk.Tk):
     def _is_review_result(result: ImageResult | None) -> bool:
         if result is None:
             return False
-        return result.status != "OK" or bool(result.warnings) or any(plate.needs_review or (plate.final_text and not plate.review_approved) for plate in result.plates)
+        # Warnings and rejected OCR noise are diagnostic only. A clear primary
+        # plate remains recognised without forcing the operator into review.
+        return result.status != "OK" or any(plate.needs_review for plate in result.plates)
 
     def _review_row_values(self, path: Path, result: ImageResult | None) -> tuple[str, str, str]:
         if result is None:
@@ -3050,7 +3122,7 @@ class CheckVehicleApp(tk.Tk):
             ):
                 continue
             if result_filter == "Biển đặc biệt" and not any(
-                plate.format_status is PlateFormatStatus.UNMATCHED
+                plate.format_status is PlateFormatStatus.SPECIAL_OR_UNKNOWN
                 or plate.detected_format is DetectedPlateFormat.SPECIAL_OR_UNKNOWN
                 for plate in (result.plates if result else [])
             ):
@@ -3213,6 +3285,43 @@ class CheckVehicleApp(tk.Tk):
             ttk.Button(self.plates_frame, text="Xóa", command=lambda plate=plate: self.delete_current_plate(plate)).grid(
                 row=row_index, column=3, sticky="ew", padx=(8, 0), pady=4
             )
+        if result.rejected_candidates or result.pipeline_metrics:
+            debug_row = len(result.plates) + 1
+            debug = ttk.LabelFrame(self.plates_frame, text="Chẩn đoán candidate", style="Card.TLabelframe")
+            debug.grid(row=debug_row, column=0, columnspan=4, sticky="ew", pady=(8, 0))
+            debug.columnconfigure(0, weight=1)
+            body = ttk.Frame(debug, style="Surface.TFrame")
+
+            selected = result.primary_plate.final_text if result.primary_plate else "—"
+            lines = [
+                f"Candidate được chọn: {selected}",
+                f"Lý do chọn: {result.selected_candidate_reason or result.pipeline_metrics.get('selected_candidate_reason') or '—'}",
+            ]
+            for candidate in result.rejected_candidates:
+                lines.append(f"Đã loại: {candidate.raw_text or candidate.text or '—'} — {candidate.rejected_reason or candidate.reason or 'Không đạt điều kiện plate-like.'}")
+            if result.pipeline_metrics:
+                labels = (
+                    ("detector_calls", "Detector"),
+                    ("crop_ocr_calls", "OCR crop"),
+                    ("full_scene_ocr_calls", "OCR toàn ảnh"),
+                    ("tesseract_calls", "Tesseract"),
+                    ("ai_calls", "AI"),
+                    ("candidates_before_filter", "Candidate trước lọc"),
+                    ("candidates_after_filter", "Candidate sau lọc"),
+                )
+                lines.append(" • ".join(f"{label}: {result.pipeline_metrics.get(key, 0)}" for key, label in labels))
+            ttk.Label(body, text="\n".join(lines), style="SurfaceMuted.TLabel", wraplength=680, justify="left").grid(row=0, column=0, sticky="w", padx=6, pady=6)
+
+            def toggle_debug() -> None:
+                if body.winfo_ismapped():
+                    body.grid_remove()
+                    toggle.configure(text="Hiện chẩn đoán")
+                else:
+                    body.grid(row=1, column=0, sticky="ew")
+                    toggle.configure(text="Ẩn chẩn đoán")
+
+            toggle = ttk.Button(debug, text="Hiện chẩn đoán", command=toggle_debug)
+            toggle.grid(row=0, column=0, sticky="w", padx=6, pady=4)
         self.plates_frame.columnconfigure(1, weight=1)
 
     def delete_current_plate(self, plate: PlateCandidate) -> None:
@@ -3286,16 +3395,15 @@ class CheckVehicleApp(tk.Tk):
         return bool(plates) and all(plate.review_approved for plate in plates)
 
     def _review_count(self) -> int:
-        threshold = float(self.blur_threshold_var.get())
         count = 0
         for result in self.results:
-            if result.status != "OK" or result.blur_score < threshold or result.warnings:
+            if result.status != "OK":
                 count += 1
                 continue
             if not any(plate.final_text for plate in result.plates):
                 count += 1
                 continue
-            if any(plate.final_text and not plate.review_approved for plate in result.plates):
+            if any(plate.needs_review for plate in result.plates):
                 count += 1
         return count
 
@@ -3415,6 +3523,7 @@ class CheckVehicleApp(tk.Tk):
             self.performance_preset_var,
             self.paddle_scan_mode_var,
             self.plate_type_var,
+            self.expected_plate_count_var,
             self.ai_review_policy_var,
             self.embed_excel_images_var,
             self.export_reviewed_only_var,
@@ -3528,6 +3637,7 @@ class CheckVehicleApp(tk.Tk):
                 "performance_preset": self._performance_preset_key(),
                 "paddle_scan_mode": self.paddle_scan_mode_var.get().strip() or PADDLE_SCAN_MODE_DEFAULT,
                 "last_plate_type": self._selected_plate_type().value,
+                "last_expected_plate_count": self._selected_expected_plate_count().value,
                 "ai_review_policy": self._selected_ai_review_policy().value,
                 "embed_excel_images": bool(self.embed_excel_images_var.get()),
                 "export_reviewed_only": bool(self.export_reviewed_only_var.get()),
@@ -3925,7 +4035,7 @@ def _row_tag(result: ImageResult | None, approved: bool) -> str:
     if result is None:
         return "pending"
     if any(
-        plate.format_status is PlateFormatStatus.UNMATCHED
+        plate.format_status is PlateFormatStatus.SPECIAL_OR_UNKNOWN
         or plate.detected_format is DetectedPlateFormat.SPECIAL_OR_UNKNOWN
         for plate in result.plates
     ):
@@ -3954,6 +4064,7 @@ def _needs_paddle_tesseract_fallback(result: ImageResult, confidence_threshold: 
     return any(
         plate.needs_review
         or plate.confidence < confidence_threshold
+        or plate.format_status is PlateFormatStatus.SPECIAL_OR_UNKNOWN
         or not plate.normalized_text
         for plate in readable
     )
@@ -3968,6 +4079,7 @@ def _run_tesseract_fallback_if_needed(
     blur_threshold: float,
     confidence_threshold: float,
     plate_type: PlateType,
+    expected_plate_count: ExpectedPlateCount = ExpectedPlateCount.ONE,
     *,
     image_bgr=None,
     image_size: tuple[int, int] | None = None,
@@ -3992,11 +4104,18 @@ def _run_tesseract_fallback_if_needed(
             max(20.0, confidence_threshold - 10.0),
             image_bgr=image_bgr,
             image_size=image_size,
+            selected_plate_type=plate_type,
+            expected_plate_count=expected_plate_count,
         )
     except Exception:
         paddle_result.warnings.append("Tesseract dự phòng không xử lý được ảnh này; batch tiếp tục bằng PaddleOCR.")
         return paddle_result
-    return apply_fallback_selection(paddle_result, tesseract_result, plate_type)
+    merged = apply_fallback_selection(paddle_result, tesseract_result, plate_type)
+    metrics = merged.pipeline_metrics
+    metrics["tesseract_calls"] = int(metrics.get("tesseract_calls", 0)) + int(
+        tesseract_result.pipeline_metrics.get("tesseract_calls", 0) or 1
+    )
+    return merged
 
 
 def _merge_gemini_local_result(gemini_result: ImageResult, local_result: ImageResult) -> ImageResult:

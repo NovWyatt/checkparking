@@ -8,9 +8,11 @@ import cv2
 import numpy as np
 
 from .image_io import load_image, save_crop
-from .models import ImageResult, PlateCandidate
+from .models import ExpectedPlateCount, ImageResult, PlateCandidate, coerce_expected_plate_count
 from .ocr import TesseractOcrEngine, is_timestamp_like, looks_like_plate, plate_text_metadata
 from .plate_detector import detect_plate_candidates_onnx, onnx_detector_error
+from .plate_formatting import PlateFormatStatus, PlateType, coerce_plate_type
+from .plate_selection import assess_plate_candidate, choose_primary_candidates
 
 
 def blur_score(image_bgr: np.ndarray) -> float:
@@ -202,7 +204,7 @@ def fallback_candidates(image_bgr: np.ndarray) -> list[PlateCandidate]:
     ]
 
 
-def process_image(
+def _legacy_process_image(
     image_path: Path,
     crop_dir: Path,
     ocr_engine: TesseractOcrEngine,
@@ -915,6 +917,261 @@ def _mask_timestamp_overlay(crop_bgr: np.ndarray, bbox: tuple[int, int, int, int
         if local_x2 > local_x1 and local_y2 > local_y1:
             cv2.rectangle(masked, (local_x1, local_y1), (local_x2, local_y2), fill_color, thickness=-1)
     return masked
+
+
+def process_image(
+    image_path: Path,
+    crop_dir: Path,
+    ocr_engine: TesseractOcrEngine,
+    blur_threshold: float = 80.0,
+    confidence_threshold: float = 40.0,
+    paddle_scan_mode: str = "balanced",
+    image_bgr: np.ndarray | None = None,
+    image_size: tuple[int, int] | None = None,
+    selected_plate_type: PlateType | str | None = PlateType.NONE,
+    expected_plate_count: ExpectedPlateCount | str | None = ExpectedPlateCount.ONE,
+) -> ImageResult:
+    """Run the bounded detector-first local OCR pipeline.
+
+    Previous releases sent full images and broad rescue tiles through PaddleOCR
+    before a valid plate was selected.  Camera overlays then became false
+    plate candidates.  This path treats plate detection as the gate: FAST and
+    BALANCED OCR only a few detector crops and stop as soon as one clear plate
+    is found.  A full-scene Paddle pass is a single, bounded fallback only.
+    """
+
+    if image_bgr is None:
+        try:
+            image_bgr, (width, height) = load_image(image_path)
+        except Exception as exc:
+            return ImageResult(image_path=image_path, status="ERROR", reason="Không đọc được file ảnh", error=str(exc))
+    elif image_size is None:
+        height, width = image_bgr.shape[:2]
+    else:
+        width, height = image_size
+
+    selected_type = coerce_plate_type(selected_plate_type)
+    expected_count = coerce_expected_plate_count(expected_plate_count)
+    scan_mode = _normalize_paddle_scan_mode(paddle_scan_mode)
+    sharpness = blur_score(image_bgr)
+    warnings = [f"Ảnh mờ, blur={sharpness:.1f} < {blur_threshold:.1f}"] if sharpness < blur_threshold else []
+    metrics: dict[str, int | float | str] = {
+        "detector_calls": 0,
+        "crop_ocr_calls": 0,
+        "full_scene_ocr_calls": 0,
+        "tesseract_calls": 0,
+        "ai_calls": 0,
+        "candidates_before_filter": 0,
+        "candidates_after_filter": 0,
+        "selected_candidate_reason": "",
+    }
+    rejected: list[PlateCandidate] = []
+    accepted: list[PlateCandidate] = []
+
+    detector_candidates = _detector_first_regions(image_bgr, scan_mode, metrics)
+    crop_limit = 2 if scan_mode == "fast" else (3 if scan_mode == "balanced" else 6)
+    region_reader = getattr(ocr_engine, "read_plate_regions", None)
+    variant_reader = getattr(ocr_engine, "read_plate_variants", None)
+    can_read_regions = callable(region_reader)
+
+    def record_attempt(
+        detector_candidate: PlateCandidate,
+        attempt,
+        *,
+        source: str,
+        bbox: tuple[int, int, int, int] | None = None,
+        crop_path: Path | None = None,
+    ) -> PlateCandidate:
+        metrics["candidates_before_filter"] = int(metrics["candidates_before_filter"]) + 1
+        candidate = PlateCandidate(
+            bbox=bbox or detector_candidate.bbox,
+            score=detector_candidate.score,
+            source=source,
+            crop_path=crop_path,
+            text=attempt.text or attempt.raw_text,
+            raw_text=attempt.raw_text or attempt.text,
+            normalized_text=attempt.normalized_text,
+            cleaned_text=attempt.cleaned_text,
+            suggested_texts=list(attempt.suggested_texts),
+            ambiguity_flags=list(attempt.ambiguity_flags),
+            confidence=float(attempt.confidence or 0.0),
+            detector_confidence=detector_candidate.detector_confidence or detector_candidate.score,
+            selected_engine=attempt.engine or "paddleocr",
+        )
+        assessment = assess_plate_candidate(candidate, plate_type=selected_type, image_size=(width, height))
+        candidate.cleaned_text = assessment.cleaned_text
+        candidate.normalized_text = assessment.cleaned_text
+        candidate.selection_score = assessment.score
+        candidate.score = assessment.score
+        candidate.selection_reason = assessment.reason
+        if not assessment.accepted:
+            candidate.readable = False
+            candidate.candidate_status = PlateFormatStatus.REJECTED_NOISE.value
+            candidate.format_status = PlateFormatStatus.REJECTED_NOISE
+            candidate.reason = assessment.reason
+            candidate.rejected_reason = assessment.reason
+            rejected.append(candidate)
+            return candidate
+
+        candidate.ocr_needs_review = bool(candidate.ambiguity_flags)
+        decision = candidate.apply_plate_formatting(selected_type)
+        candidate.candidate_status = decision.format_status.value
+        candidate.needs_review = bool(
+            candidate.ambiguity_flags
+            or candidate.confidence < confidence_threshold
+            or decision.format_status is PlateFormatStatus.SPECIAL_OR_UNKNOWN
+        )
+        candidate.readable = True
+        metrics["candidates_after_filter"] = int(metrics["candidates_after_filter"]) + 1
+        accepted.append(candidate)
+        return candidate
+
+    def is_early_exit(candidate: PlateCandidate) -> bool:
+        if candidate.candidate_status == PlateFormatStatus.REJECTED_NOISE.value:
+            return False
+        if candidate.confidence < confidence_threshold:
+            return False
+        return candidate.format_status in {PlateFormatStatus.FORMATTED, PlateFormatStatus.DISABLED}
+
+    for index, detector_candidate in enumerate(detector_candidates[:crop_limit], start=1):
+        x, y, box_width, box_height = detector_candidate.bbox
+        crop = image_bgr[y : y + box_height, x : x + box_width]
+        if crop.size == 0:
+            continue
+        crop_path = crop_dir / f"{_safe_stem(image_path.stem)}_{_path_hash(image_path)}_{index:02d}_detector.jpg"
+        save_crop(crop, crop_path)
+        crop_accepted: list[PlateCandidate] = []
+        if can_read_regions:
+            metrics["crop_ocr_calls"] = int(metrics["crop_ocr_calls"]) + 1
+            for _local_bbox, attempt in region_reader(crop) or []:
+                candidate = record_attempt(
+                    detector_candidate,
+                    attempt,
+                    source=f"detector_crop:{detector_candidate.source}",
+                    crop_path=crop_path,
+                )
+                if candidate.readable:
+                    crop_accepted.append(candidate)
+        single_reader = getattr(ocr_engine, "read_plate", None)
+        if not crop_accepted and (callable(variant_reader) or callable(single_reader)):
+            metrics["crop_ocr_calls"] = int(metrics["crop_ocr_calls"]) + 1
+            if not can_read_regions:
+                metrics["tesseract_calls"] = int(metrics["tesseract_calls"]) + 1
+            attempt = variant_reader(crop) if callable(variant_reader) else single_reader(crop)
+            candidate = record_attempt(
+                detector_candidate,
+                attempt,
+                source=f"detector_crop:{detector_candidate.source}",
+                crop_path=crop_path,
+            )
+            if candidate.readable:
+                crop_accepted.append(candidate)
+
+        if expected_count is ExpectedPlateCount.ONE and crop_accepted:
+            best_crop = max(crop_accepted, key=lambda item: item.selection_score)
+            if scan_mode == "fast" or (scan_mode == "balanced" and is_early_exit(best_crop)):
+                break
+
+    # Full-scene OCR is a last resort for Paddle only. A plate-like crop below
+    # the confidence threshold is not considered a successful crop: BALANCED
+    # may make one bounded fallback attempt, while FAST still never does.
+    # Tesseract must never inspect a complete phone photo because overlays
+    # dominate its output.
+    has_sufficient_crop_candidate = any(is_early_exit(candidate) for candidate in accepted)
+    if not has_sufficient_crop_candidate and can_read_regions and scan_mode != "fast":
+        metrics["full_scene_ocr_calls"] = int(metrics["full_scene_ocr_calls"]) + 1
+        full_scene = PlateCandidate(bbox=(0, 0, width, height), score=0.0, source="full_scene_fallback")
+        for local_bbox, attempt in region_reader(image_bgr) or []:
+            lx, ly, lw, lh = local_bbox
+            record_attempt(
+                full_scene,
+                attempt,
+                source="full_scene_fallback",
+                bbox=(max(0, lx), max(0, ly), max(1, lw), max(1, lh)),
+            )
+
+    primary, discarded, selected_reason = choose_primary_candidates(
+        accepted,
+        allow_multiple=expected_count is ExpectedPlateCount.MULTIPLE,
+    )
+    for candidate in discarded:
+        candidate.candidate_status = "NOT_SELECTED"
+        candidate.rejected_reason = "Candidate yếu hơn hoặc không thuộc một vùng biển vật lý riêng."
+        candidate.reason = candidate.rejected_reason
+        rejected.append(candidate)
+
+    metrics["selected_candidate_reason"] = selected_reason
+    if primary:
+        for candidate in primary:
+            candidate.selection_reason = selected_reason if candidate is primary[0] else candidate.selection_reason
+        return ImageResult(
+            image_path=image_path,
+            status="OK",
+            reason="Đã nhận diện biển số từ vùng detector.",
+            blur_score=sharpness,
+            width=width,
+            height=height,
+            candidate_count=len(detector_candidates),
+            plates=primary,
+            warnings=warnings,
+            selected_plate_type=selected_type,
+            expected_plate_count=expected_count,
+            rejected_candidates=rejected,
+            pipeline_metrics=metrics,
+            selected_candidate_reason=selected_reason,
+        )
+
+    status = "BLURRY" if sharpness < blur_threshold else "UNREADABLE"
+    reason = "Ảnh mờ và không đọc được biển số." if status == "BLURRY" else "Không có candidate biển số hợp lệ sau detector-first OCR."
+    return ImageResult(
+        image_path=image_path,
+        status=status,
+        reason=reason,
+        blur_score=sharpness,
+        width=width,
+        height=height,
+        candidate_count=len(detector_candidates),
+        warnings=warnings,
+        selected_plate_type=selected_type,
+        expected_plate_count=expected_count,
+        rejected_candidates=rejected,
+        pipeline_metrics=metrics,
+        selected_candidate_reason=selected_reason,
+    )
+
+
+def _detector_first_regions(
+    image_bgr: np.ndarray,
+    scan_mode: str,
+    metrics: dict[str, int | float | str],
+) -> list[PlateCandidate]:
+    """Return only physical plate regions, sorted and de-duplicated."""
+
+    metrics["detector_calls"] = int(metrics["detector_calls"]) + 1
+    onnx = detect_plate_candidates_onnx(
+        image_bgr,
+        max_candidates=_onnx_detector_limit(scan_mode),
+        confidence_threshold=_onnx_detector_confidence(scan_mode),
+    )
+    if onnx:
+        for candidate in onnx:
+            candidate.detector_confidence = candidate.score
+        return _non_max_suppression(onnx, _onnx_detector_limit(scan_mode))
+
+    # The classical detector is offline and bounded.  It is used only when the
+    # ONNX plate detector is unavailable or returns no physical plate region.
+    metrics["detector_calls"] = int(metrics["detector_calls"]) + 3
+    classical = [
+        *detect_plate_candidates(image_bgr, max_candidates=4),
+        *detect_plate_candidates_second_pass(image_bgr, max_candidates=4),
+        *detect_plate_outline_candidates(image_bgr, max_candidates=3),
+    ]
+    limit = 2 if scan_mode == "fast" else (3 if scan_mode == "balanced" else 6)
+    regions = _non_max_suppression(sorted(classical, key=lambda item: item.score, reverse=True), limit)
+    for candidate in regions:
+        candidate.detector_confidence = candidate.score
+        candidate.source = f"classical_plate_detector:{candidate.source}"
+    return regions
 
 
 def _non_max_suppression(candidates: list[PlateCandidate], limit: int) -> list[PlateCandidate]:

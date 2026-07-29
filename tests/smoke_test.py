@@ -16,6 +16,7 @@ from check_vehicle_ocr.excel_export import export_results
 from check_vehicle_ocr.gemini_vision import GeminiVisionEngine, _thinking_config_for_model
 from check_vehicle_ocr.image_io import collect_images, load_image
 from check_vehicle_ocr.models import ImageResult, OcrAttempt, PlateCandidate
+from check_vehicle_ocr.plate_formatting import PlateType
 from check_vehicle_ocr.ocr import TesseractOcrEngine, find_tesseract, is_timestamp_like, looks_like_plate
 from check_vehicle_ocr.paddle_ocr_engine import PaddleOcrEngine
 from check_vehicle_ocr import plate_detector as plate_detector_module
@@ -208,12 +209,12 @@ def main() -> int:
         if not result.plates:
             raise AssertionError("Smoke test khong tao duoc plate result")
         result.plates[0].review_approved = True
-        result.plates[0].corrected_text = "=1+1"
+        result.plates[0].set_manual_correction("=1+1", PlateType.NONE)
 
         regional_result = process_image(image_path, root / "regional_crops", FakeRegionalEngine(), blur_threshold=10, confidence_threshold=45)
-        regional_plates = sorted(plate.normalized_text for plate in regional_result.plates if plate.readable)
-        if regional_plates != ["54L112345", "59B158129"]:
-            raise AssertionError(f"Khong tach dung nhieu bien so hoac chua loc timestamp: {regional_plates}")
+        regional_plates = [plate.normalized_text for plate in regional_result.plates if plate.readable]
+        if regional_plates != ["59B158129"]:
+            raise AssertionError(f"Mac dinh mot bien/anh phai giu candidate detector/OCR tot nhat va loc timestamp: {regional_plates}")
 
         counting_engine = CountingRegionalEngine()
         counting_result = process_image(image_path, root / "counting_crops", counting_engine, blur_threshold=10, confidence_threshold=45)

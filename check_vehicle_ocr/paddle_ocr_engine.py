@@ -12,6 +12,7 @@ import numpy as np
 from .models import OcrAttempt
 from .ocr_models import DEFAULT_MODEL_PROFILE, PP_OCRV6_TINY
 from .ocr import format_vietnam_plate, is_timestamp_like, looks_like_plate, normalize_plate_text, plate_quality_score
+from .plate_selection import is_plate_like_candidate
 
 
 # PaddlePaddle 3.x CPU inference can trip a oneDNN PIR conversion bug on Windows.
@@ -337,16 +338,20 @@ def _region_attempts_from_result(result) -> list[tuple[tuple[int, int, int, int]
     for index, first in enumerate(ordered):
         for second in ordered[index + 1 : index + 4]:
             if _can_group_plate_lines(first["bbox"], second["bbox"]):
-                candidates.append(_make_region_attempt([first, second], "paddle_region_group"))
+                pair = _make_region_attempt([first, second], "paddle_region_group")
+                if is_plate_like_candidate(pair[1].normalized_text):
+                    candidates.append(pair)
                 for third in ordered[index + 2 : index + 6]:
                     if third is second:
                         continue
                     if _can_group_plate_lines(second["bbox"], third["bbox"]):
-                        candidates.append(_make_region_attempt([first, second, third], "paddle_region_group3"))
+                        grouped = _make_region_attempt([first, second, third], "paddle_region_group3")
+                        if is_plate_like_candidate(grouped[1].normalized_text):
+                            candidates.append(grouped)
 
     best_by_plate: dict[str, tuple[tuple[int, int, int, int], OcrAttempt]] = {}
     for bbox, attempt in candidates:
-        if not attempt.normalized_text or not looks_like_plate(attempt.normalized_text):
+        if not attempt.normalized_text or not is_plate_like_candidate(attempt.normalized_text):
             continue
         if is_timestamp_like(attempt.raw_text) or is_timestamp_like(attempt.text):
             continue
@@ -432,14 +437,15 @@ def _can_group_plate_lines(a: tuple[int, int, int, int], b: tuple[int, int, int,
         return False
 
     vertical_gap = by - (ay + ah)
-    if vertical_gap > max(ah, bh) * 0.95:
+    if vertical_gap > max(ah, bh) * 0.70:
         return False
 
     ax2 = ax + aw
     bx2 = bx + bw
     horizontal_overlap = max(0, min(ax2, bx2) - max(ax, bx)) / max(1, min(aw, bw))
     center_distance = abs((ax + aw / 2) - (bx + bw / 2))
-    return horizontal_overlap >= 0.18 or center_distance <= max(aw, bw) * 0.72
+    width_ratio = max(aw, bw) / max(1, min(aw, bw))
+    return width_ratio <= 2.8 and (horizontal_overlap >= 0.42 or center_distance <= max(aw, bw) * 0.34)
 
 
 def _candidate_strings(scored_texts: list[tuple[str, float]]) -> list[tuple[str, float]]:

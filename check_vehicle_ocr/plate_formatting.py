@@ -22,7 +22,10 @@ class PlateType(StrEnum):
 
 class PlateFormatStatus(StrEnum):
     FORMATTED = "FORMATTED"
-    UNMATCHED = "UNMATCHED"
+    SPECIAL_OR_UNKNOWN = "SPECIAL_OR_UNKNOWN"
+    # Backward-compatible symbolic name for persisted v1.8/v1.9 sessions.
+    UNMATCHED = SPECIAL_OR_UNKNOWN
+    REJECTED_NOISE = "REJECTED_NOISE"
     MANUAL = "MANUAL"
     DISABLED = "DISABLED"
 
@@ -156,7 +159,7 @@ def reformat_manual_correction(manual_correction: object, selected_plate_type: P
         export_text=correction,
         selected_plate_type=result.selected_plate_type,
         detected_format=DetectedPlateFormat.SPECIAL_OR_UNKNOWN,
-        format_status=PlateFormatStatus.UNMATCHED,
+        format_status=PlateFormatStatus.SPECIAL_OR_UNKNOWN,
         format_reason=_unmatched_reason(result.selected_plate_type),
         needs_review=True,
         manual_correction=correction,
