@@ -83,7 +83,11 @@ def test_manifest_and_atomic_install() -> None:
         fixture.write_bytes(b"fixture")
         assert validate_tesseract_component(staged, runner=_fake_runner, expected_version="5.5.3", smoke_image=fixture) == "tesseract 5.5.3"
         active = activate_tesseract_stage(staged, manifest, root)
-        assert active == root / "5.5.3" / "bin" / "tesseract.exe" and active.is_file()
+        # Windows may canonicalize a temporary directory's drive/path casing
+        # during ``Path.resolve``. Assert the versioned install location after
+        # canonicalization rather than comparing case-sensitive Path strings.
+        assert active.is_file()
+        assert active.resolve().relative_to(root.resolve()) == Path("5.5.3") / "bin" / "tesseract.exe"
         assert not any(path.name.startswith(".tesseract-") for path in root.iterdir())
 
 
