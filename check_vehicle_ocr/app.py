@@ -443,12 +443,18 @@ class CheckVehicleApp(tk.Tk):
         embedded_release_repository = GITHUB_REPOSITORY
         raw_update_source_mode = update_settings.get("source_mode")
         saved_update_source_mode = str(raw_update_source_mode or "").strip().lower()
+        self._update_source_mode_explicit = bool(update_settings.get("source_mode_explicit", False))
         if saved_update_source_mode not in {"disabled", "github", "manifest"}:
             saved_update_source_mode = "github" if embedded_release_repository else ("manifest" if update_settings.get("manifest_url") else "disabled")
         elif raw_update_source_mode is None and embedded_release_repository:
             # A packaged build embeds its own GitHub repository.  A fresh
             # profile should use that safe public release source immediately,
             # while an explicit operator choice of “Tắt cập nhật” is retained.
+            saved_update_source_mode = "github"
+        elif saved_update_source_mode == "disabled" and embedded_release_repository and not self._update_source_mode_explicit:
+            # v1.8 and older stored ``disabled`` as a default.  Its absence of
+            # an explicit-choice marker is enough to migrate safely to the
+            # app's first-party GitHub Release source.
             saved_update_source_mode = "github"
         self.update_source_mode_var = tk.StringVar(value=UPDATE_SOURCE_LABELS[saved_update_source_mode])
         self.github_repository_var = tk.StringVar(value=str(update_settings.get("github_repository") or embedded_release_repository or ""))
@@ -2336,6 +2342,10 @@ class CheckVehicleApp(tk.Tk):
                 return key
         return "disabled"
 
+    def _mark_update_source_mode_explicit(self, *_args) -> None:
+        """Retain a user's deliberate source-mode choice across migrations."""
+        self._update_source_mode_explicit = True
+
     def _has_configured_update_source(self) -> bool:
         source_mode = self._update_source_mode_key()
         if source_mode == "github":
@@ -3428,6 +3438,7 @@ class CheckVehicleApp(tk.Tk):
             self.tesseract_manifest_url_var,
         ):
             variable.trace_add("write", lambda *_args: self._schedule_settings_save())
+        self.update_source_mode_var.trace_add("write", self._mark_update_source_mode_explicit)
         for variable in (
             self.openai_api_key_var,
             self.gemini_api_key_var,
@@ -3529,6 +3540,7 @@ class CheckVehicleApp(tk.Tk):
                 },
                 "updates": {
                     "source_mode": source_mode,
+                    "source_mode_explicit": bool(self._update_source_mode_explicit),
                     "github_repository": self.github_repository_var.get().strip(),
                     "manifest_url": manifest_url,
                     "paddle_release_source": self.paddle_release_source_var.get().strip(),

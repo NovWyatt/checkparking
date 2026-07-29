@@ -249,6 +249,34 @@ def _test_packaged_github_default() -> None:
         os.environ["APPDATA"] = old_appdata
 
 
+def _test_legacy_disabled_update_source_migrates_without_overriding_an_explicit_choice() -> None:
+    import check_vehicle_ocr.app as app_module
+
+    old_appdata = os.environ.get("APPDATA")
+    with tempfile.TemporaryDirectory() as temporary:
+        os.environ["APPDATA"] = temporary
+        legacy = {"updates": {"source_mode": "disabled", "github_repository": ""}}
+        app_module.save_settings(legacy)
+        app = app_module.CheckVehicleApp()
+        try:
+            assert app._update_source_mode_key() == "github"
+            assert app.github_repository_var.get() == "NovWyatt/checkparking"
+        finally:
+            app.destroy()
+
+        explicit = {"updates": {"source_mode": "disabled", "source_mode_explicit": True, "github_repository": "NovWyatt/checkparking"}}
+        app_module.save_settings(explicit)
+        app = app_module.CheckVehicleApp()
+        try:
+            assert app._update_source_mode_key() == "disabled"
+        finally:
+            app.destroy()
+    if old_appdata is None:
+        os.environ.pop("APPDATA", None)
+    else:
+        os.environ["APPDATA"] = old_appdata
+
+
 def _test_combobox_states() -> None:
     old_appdata = os.environ.get("APPDATA")
     with tempfile.TemporaryDirectory() as temporary:
@@ -286,6 +314,7 @@ def main() -> int:
     _test_tesseract_verified_package()
     _test_update_center_primary_actions()
     _test_packaged_github_default()
+    _test_legacy_disabled_update_source_migrates_without_overriding_an_explicit_choice()
     _test_combobox_states()
     print("update_actions_control_test OK")
     return 0

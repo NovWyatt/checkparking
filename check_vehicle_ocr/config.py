@@ -106,6 +106,12 @@ def migrate_settings(data: dict[str, Any]) -> dict[str, Any]:
     # change a legitimate local manifest URL.
     if removed_test_manifest and updates["source_mode"] == "manifest":
         updates["source_mode"] = "disabled"
+    # Settings written before the packaged GitHub updater did not record
+    # whether ``disabled`` was an operator choice or merely the old default.
+    # Treat the unmarked value as a legacy default; a newer explicit choice is
+    # preserved so an operator can still opt out of update checks.
+    updates.setdefault("source_mode_explicit", False)
+    updates["source_mode_explicit"] = bool(updates["source_mode_explicit"])
     updates.setdefault("github_repository", "")
     updates.setdefault("github_token_dpapi", "")
     # A short-lived development build could have written this optional token
