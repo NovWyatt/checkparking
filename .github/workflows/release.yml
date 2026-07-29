@@ -53,7 +53,16 @@ jobs:
             'tests\scrollable_frame_test.py', 'tests\v190_tesseract_component_test.py',
             'tests\v190_candidate_scoring_test.py', 'tests\v190_runtime_version_test.py'
           )
-          foreach ($test in $tests) { .\.venv\Scripts\python.exe -B $test; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE } }
+          foreach ($test in $tests) {
+            $output = & .\.venv\Scripts\python.exe -B $test 2>&1
+            $exitCode = $LASTEXITCODE
+            $output | ForEach-Object { Write-Host $_ }
+            if ($exitCode -ne 0) {
+              $detail = (($output | Out-String) -replace '[\r\n]+', ' ').Trim()
+              Write-Host "::error title=Release verification ${test}::$detail"
+              exit $exitCode
+            }
+          }
           .\.venv\Scripts\python.exe -B tools\validate_tesseract_component.py --archive component-assets\CheckVehicleOCR-Tesseract-5.5.3-win-x64.zip --manifest component-assets\tesseract-component-manifest.json
       - name: Build portable executable and installer
         shell: pwsh
