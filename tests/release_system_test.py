@@ -133,6 +133,8 @@ def test_release_workflow_publishes_the_model_component() -> None:
     upload = "release-assets/CheckVehicleOCR-PP-OCRv6-small-model-*.zip"
     assert required in workflow
     assert upload in workflow
+    assert "overwrite_files: true" in workflow
+    assert "replacesArtifacts" not in workflow
 
 
 def main() -> int:

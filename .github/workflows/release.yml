@@ -98,7 +98,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           body_path: docs/release-notes-v1.9.0.md
-          replacesArtifacts: true
+          overwrite_files: true
           files: |
             release-assets/CheckVehicleOCR-Setup-*.exe
             release-assets/CheckVehicleOCR-Portable-*.zip
