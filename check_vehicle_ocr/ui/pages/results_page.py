@@ -12,8 +12,8 @@ class ResultsPage(Page):
 
     def __init__(self, parent, controller):
         super().__init__(parent, controller)
-        self.columnconfigure(0, weight=3, minsize=470)
-        self.columnconfigure(1, weight=4, minsize=430)
+        self.columnconfigure(0, weight=1, minsize=400)
+        self.columnconfigure(1, weight=0, minsize=400)
         self.rowconfigure(1, weight=1)
 
         metrics = ttk.Frame(self, style="App.TFrame")
@@ -53,7 +53,7 @@ class ResultsPage(Page):
         controller.result_filter_combo = ttk.Combobox(
             toolbar,
             textvariable=controller.result_filter_var,
-            values=("Tất cả", "Cần kiểm tra", "Có lỗi"),
+            values=("Tất cả", "Đã định dạng", "Biển đặc biệt", "Cần kiểm tra", "Có lỗi"),
             width=15,
             state="readonly",
             style="Operator.TCombobox",
@@ -70,21 +70,31 @@ class ResultsPage(Page):
         controller.export_button = ttk.Button(actions, text="Xuất Excel", command=controller.export_selected_results, state="disabled", style="Primary.TButton")
         controller.export_button.grid(row=0, column=0, sticky="ew", padx=(0, 4))
         ttk.Button(actions, text="Quét batch mới", command=lambda: controller.show_page("scan")).grid(row=0, column=1, sticky="ew", padx=(4, 0))
+        controller.reformat_results_button = ttk.Button(
+            actions,
+            text="Áp dụng lại định dạng cho kết quả hiện tại",
+            command=controller.reformat_current_results,
+        )
+        controller.reformat_results_button.grid(row=1, column=0, columnspan=2, sticky="w", pady=(7, 0))
+        controller.reformat_results_button.grid_remove()
+        controller.reformat_hint_label = ttk.Label(actions, textvariable=controller.reformat_hint_var, style="SurfaceMuted.TLabel", wraplength=420)
+        controller.reformat_hint_label.grid(row=2, column=0, columnspan=2, sticky="w", pady=(3, 0))
+        controller.reformat_hint_label.grid_remove()
         ttk.Checkbutton(parent, text="Chỉ xuất biển số đã xác nhận", variable=controller.export_reviewed_only_var).grid(row=3, column=0, sticky="w", pady=(8, 0))
 
     @staticmethod
     def _create_tree(parent, controller):
-        columns = ("status", "file", "raw", "plate", "confidence", "review")
+        columns = ("file", "plate_type", "raw", "export", "format_status", "review")
         tree = ttk.Treeview(parent, columns=columns, show="headings", selectmode="extended")
         headings = {
-            "status": "Trạng thái",
             "file": "Tên ảnh",
-            "raw": "OCR thô",
-            "plate": "Kết quả chọn",
-            "confidence": "Tin cậy",
-            "review": "Kiểm tra",
+            "plate_type": "Loại biển",
+            "raw": "OCR gốc",
+            "export": "Biển số xuất",
+            "format_status": "Trạng thái",
+            "review": "Cần kiểm tra",
         }
-        widths = {"status": 100, "file": 160, "raw": 150, "plate": 130, "confidence": 76, "review": 100}
+        widths = {"file": 110, "plate_type": 85, "raw": 100, "export": 110, "format_status": 100, "review": 90}
         for key in columns:
             tree.heading(key, text=headings[key], command=lambda column=key: controller.sort_result_table(column))
             tree.column(key, width=widths[key], anchor="w")
@@ -98,8 +108,8 @@ class ResultsPage(Page):
         ttk.Label(parent, textvariable=controller.detail_meta_var, style="SurfaceMuted.TLabel", wraplength=520).grid(row=1, column=0, sticky="w", pady=(3, 8))
         preview_holder = ttk.Frame(parent, style="Surface.TFrame")
         preview_holder.grid(row=2, column=0, sticky="nsew", pady=(0, 10))
-        preview_holder.columnconfigure(0, weight=3, minsize=260)
-        preview_holder.columnconfigure(1, weight=1, minsize=150)
+        preview_holder.columnconfigure(0, weight=3, minsize=220)
+        preview_holder.columnconfigure(1, weight=1, minsize=130)
         preview_holder.rowconfigure(0, weight=1)
         controller.preview_label = tk.Label(
             preview_holder, bg=controller.colors["preview"], fg=controller.colors["on_accent"], text="Chọn một ảnh để xem", compound="center"
@@ -116,7 +126,7 @@ class ResultsPage(Page):
         frame = ttk.Frame(parent, style="Surface.TFrame")
         frame.grid(row=4, column=0, sticky="ew")
         frame.columnconfigure(0, weight=1)
-        controller.plate_canvas = tk.Canvas(frame, height=128, bg=controller.colors["surface"], highlightthickness=0)
+        controller.plate_canvas = tk.Canvas(frame, height=172, bg=controller.colors["surface"], highlightthickness=0)
         controller.plate_canvas.grid(row=0, column=0, sticky="ew")
         scroll = ttk.Scrollbar(frame, orient="vertical", command=controller.plate_canvas.yview)
         scroll.grid(row=0, column=1, sticky="ns")

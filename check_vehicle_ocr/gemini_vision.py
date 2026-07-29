@@ -114,6 +114,7 @@ class GeminiVisionEngine:
         for item in payload.get("plates", []):
             if not isinstance(item, dict):
                 continue
+            raw_plate_text = str(item.get("plate", "") or "")
             plate_text = self._plate_text_from_item(item)
             if not plate_text or is_timestamp_like(plate_text):
                 continue
@@ -146,7 +147,7 @@ class GeminiVisionEngine:
                     text=plate_text,
                     normalized_text=normalized,
                     confidence=confidence,
-                    raw_text=json.dumps(item, ensure_ascii=False),
+                    raw_text=raw_plate_text,
                     readable=readable,
                     reason=reason,
                 )

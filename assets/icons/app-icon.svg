@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="title">
+  <title>Check Vehicle OCR</title>
+  <rect x="18" y="18" width="220" height="220" rx="48" fill="#242A5C"/>
+  <path d="M61 83v-20c0-9 7-16 16-16h20M179 47h20c9 0 16 7 16 16v20M195 173v20c0 9-7 16-16 16h-20M97 209H77c-9 0-16-7-16-16v-20" fill="none" stroke="#AEB6FF" stroke-width="12" stroke-linecap="round"/>
+  <rect x="53" y="93" width="150" height="76" rx="16" fill="#F5F7FB"/>
+  <rect x="69" y="111" width="17" height="40" rx="4" fill="#242A5C"/>
+  <rect x="95" y="111" width="17" height="40" rx="4" fill="#242A5C"/>
+  <rect x="121" y="111" width="17" height="40" rx="4" fill="#242A5C"/>
+  <path d="M153 132l12 12 24-27" fill="none" stroke="#16734C" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

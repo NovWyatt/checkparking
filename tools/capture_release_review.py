@@ -86,6 +86,11 @@ def _run_capture(executable: Path, output: Path, *, dark: bool, prefix: str, rev
         process = subprocess.Popen([str(executable)], cwd=str(executable.parent), env=env)
         try:
             window = _wait_window(process.pid)
+            # A frozen Tk build can expose its top-level HWND before notebook
+            # tabs and a dark-theme reconfigure finish painting.  Capturing
+            # after the first idle/render cycle avoids a blank or half-painted
+            # PrintWindow result while still inspecting the real EXE.
+            time.sleep(1.5)
             _capture(window, output / f"{prefix}-{review_page}.png")
         finally:
             process.terminate()

@@ -191,8 +191,9 @@ def _test_update_center_primary_actions() -> None:
         try:
             app.show_settings_section("updates")
             assert app.update_check_button is not None and app.update_download_button is None
-            assert app.update_check_button.cget("text") == "Thiết lập nguồn"
-            assert "Chưa cấu hình nguồn cập nhật ứng dụng." == app.update_status_var.get()
+            assert app._update_source_mode_key() == "github"
+            assert app.github_repository_var.get() == "NovWyatt/checkparking"
+            assert app.update_check_button.cget("text") == "Kiểm tra"
 
             app.update_source_mode_var.set("Manifest tùy chỉnh")
             app.update_manifest_url_var.set("file:///mock")

@@ -78,6 +78,7 @@ class PlateRecognizerEngine:
         for item in payload.get("results", []):
             if not isinstance(item, dict):
                 continue
+            raw_plate_text = str(item.get("plate", "") or "")
             plate_text = self._plate_text_from_result(item)
             if not plate_text or is_timestamp_like(plate_text):
                 continue
@@ -100,7 +101,7 @@ class PlateRecognizerEngine:
                     text=plate_text,
                     normalized_text=normalized,
                     confidence=confidence,
-                    raw_text=json.dumps(item, ensure_ascii=False),
+                    raw_text=raw_plate_text,
                     readable=bool(plate_text),
                     reason=reason,
                 )

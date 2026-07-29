@@ -1,0 +1,9 @@
+{
+  "version": "5.x.y",
+  "platform": "windows-x64",
+  "download_url": "",
+  "sha256": "",
+  "archive_type": "zip",
+  "license": "Apache-2.0",
+  "source": "Project-controlled GitHub Release asset"
+}

@@ -264,7 +264,10 @@ def _attempt_from_result(result, preprocess_name: str) -> OcrAttempt:
                 text=display_text,
                 normalized_text=normalized,
                 confidence=quality,
-                raw_text=raw_text or candidate_text,
+                # Keep the exact winning candidate.  The aggregate OCR group
+                # may contain unrelated scene text and must not be used as a
+                # plate's immutable raw value or strict batch formatter input.
+                raw_text=candidate_text,
                 engine="paddleocr",
                 preprocess=preprocess_name,
             )

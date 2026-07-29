@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.8.0 — Chọn loại biển số, luồng hybrid rõ ràng và giao diện phát hành
+
+- Thêm lựa chọn loại biển số theo batch: Xe máy, Ô tô hoặc Không tự định dạng.
+- Chỉ tự thêm dấu gạch cho các mẫu được hỗ trợ; biển đặc biệt giữ nguyên và được đưa vào sheet `Bien_so_dac_biet`.
+- Sửa tiến trình PaddleOCR + AI: OCR cục bộ hoàn tất trước, AI chỉ nhận ảnh cần kiểm tra và trạng thái hoàn tất không còn hiển thị “Đang xử lý”.
+- Update Center rút gọn còn ba thẻ: ứng dụng, công cụ nhận diện PaddleOCR và Tesseract dự phòng.
+- Thêm vùng cuộn dùng chung cho trang dài, bộ icon gốc, icon EXE/installer và cải thiện tương phản trạng thái.
+- Tesseract chỉ cài một chạm từ gói do dự án xác minh; khi chưa có manifest, ứng dụng không tải installer bên thứ ba.
+
 ## 1.7.2 — Telegram first-notification rate-limit fix
 
 - Fixed an edge case on freshly booted machines where the first Telegram

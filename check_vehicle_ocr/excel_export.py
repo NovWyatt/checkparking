@@ -14,6 +14,7 @@ from openpyxl.utils import get_column_letter
 from PIL import Image as PillowImage, ImageOps
 
 from .models import ImageResult, PlateCandidate
+from .plate_formatting import DetectedPlateFormat, PlateFormatStatus, PlateType, coerce_plate_type
 
 try:
     from pillow_heif import register_heif_opener
@@ -54,6 +55,9 @@ def export_results(
 
         readable_sheet = workbook.create_sheet("Bien_so_doc_duoc")
         _write_readable(readable_sheet, results, reviewed, media_cache, Path(temp_dir))
+
+        special_sheet = workbook.create_sheet("Bien_so_dac_biet")
+        _write_special_plates(special_sheet, results)
 
         review_sheet = workbook.create_sheet("Can_kiem_tra")
         _write_review(review_sheet, results, blur_threshold, reviewed, media_cache, Path(temp_dir))
@@ -130,7 +134,7 @@ def _write_per_image(sheet, results: list[ImageResult], media_cache: dict[tuple[
     )
 
     for index, result in enumerate(results, start=1):
-        plates = [plate.final_text for plate in result.plates if plate.final_text]
+        plates = [_plate_export_text(plate) for plate in result.plates if _plate_export_text(plate)]
         padded_plates = plates + [""] * (max_plates - len(plates))
         sheet.append(
             [
@@ -159,7 +163,7 @@ def _write_readable(sheet, results: list[ImageResult], reviewed: bool, media_cac
             "Tên file",
             "Đường dẫn ảnh",
             "Thư mục",
-            "Biển số sau review",
+            "Biển số xuất Excel",
             "Biển số OCR",
             "Biển số OCR chuẩn hóa",
             "Độ tin cậy",
@@ -169,9 +173,16 @@ def _write_readable(sheet, results: list[ImageResult], reviewed: bool, media_cac
             "Cảnh báo",
             "Crop biển số",
             "Ảnh crop",
-            "Text OCR thô",
+            "OCR nguyên bản",
             "Trạng thái",
             "Lý do",
+            "Loại biển đã chọn",
+            "Chuỗi đã làm sạch",
+            "Biển số đã định dạng",
+            "Trạng thái định dạng",
+            "Mẫu nhận diện",
+            "Lý do cần kiểm tra",
+            "Đã sửa thủ công",
         ]
     )
 
@@ -188,7 +199,7 @@ def _write_readable(sheet, results: list[ImageResult], reviewed: bool, media_cac
                     result.image_path.name,
                     str(result.image_path),
                     str(result.image_path.parent),
-                    plate.final_text,
+                    _plate_export_text(plate),
                     plate.text,
                     plate.normalized_text,
                     round(plate.confidence, 1),
@@ -201,12 +212,65 @@ def _write_readable(sheet, results: list[ImageResult], reviewed: bool, media_cac
                     plate.raw_text,
                     result.status,
                     result.reason,
+                    _plate_type_value(plate.selected_plate_type),
+                    plate.cleaned_text,
+                    plate.formatted_text,
+                    _format_status_value(plate.format_status),
+                    _detected_format_value(plate.detected_format),
+                    plate.format_reason,
+                    plate.manual_correction,
                 ]
             )
             _add_file_links(sheet, sheet.max_row, image_col=5, crop_col=15)
             _embed_image(sheet, sheet.max_row, 2, result.image_path, media_cache, temp_dir, width=120, height=86)
             if plate.crop_path:
                 _embed_image(sheet, sheet.max_row, 16, plate.crop_path, media_cache, temp_dir, width=130, height=64)
+            row_index += 1
+
+
+def _write_special_plates(sheet, results: list[ImageResult]) -> None:
+    """Write only unmatched or special/unknown plates for operator review."""
+
+    sheet.append(
+        [
+            "STT",
+            "Tên file",
+            "Loại biển đã chọn",
+            "OCR nguyên bản",
+            "Chuỗi đã làm sạch",
+            "Biển số đã định dạng",
+            "Biển số xuất Excel",
+            "Trạng thái định dạng",
+            "Mẫu nhận diện",
+            "Lý do cần kiểm tra",
+            "Đã sửa thủ công",
+            "Đường dẫn ảnh",
+            "Batch ID",
+        ]
+    )
+    row_index = 1
+    for result in results:
+        for plate in result.plates:
+            if not _is_special_plate(plate):
+                continue
+            sheet.append(
+                [
+                    row_index,
+                    result.image_path.name,
+                    _plate_type_value(plate.selected_plate_type),
+                    plate.raw_text or plate.text,
+                    plate.cleaned_text,
+                    plate.formatted_text,
+                    _plate_export_text(plate),
+                    _format_status_value(plate.format_status),
+                    _detected_format_value(plate.detected_format),
+                    plate.format_reason,
+                    plate.manual_correction,
+                    str(result.image_path),
+                    result.batch_id,
+                ]
+            )
+            _add_file_links(sheet, sheet.max_row, image_col=12)
             row_index += 1
 
 
@@ -223,12 +287,19 @@ def _write_review(sheet, results: list[ImageResult], blur_threshold: float, revi
             "Độ nét ảnh",
             "Ngưỡng blur",
             "Số vùng nghi biển số",
-            "Biển số sau review",
+            "Biển số xuất Excel",
             "Biển số OCR",
             "Độ tin cậy OCR",
             "Crop đối chiếu",
             "Ảnh crop",
-            "Text OCR thô",
+            "OCR nguyên bản",
+            "Loại biển đã chọn",
+            "Chuỗi đã làm sạch",
+            "Biển số đã định dạng",
+            "Trạng thái định dạng",
+            "Mẫu nhận diện",
+            "Lý do cần kiểm tra",
+            "Đã sửa thủ công",
         ]
     )
 
@@ -258,12 +329,19 @@ def _write_review(sheet, results: list[ImageResult], blur_threshold: float, revi
                     round(result.blur_score, 1),
                     blur_threshold,
                     result.candidate_count,
-                    plate.final_text if plate else "",
+                    _plate_export_text(plate) if plate else "",
                     plate.text if plate else "",
                     round(plate.confidence, 1) if plate else "",
                     str(plate.crop_path) if plate and plate.crop_path else "",
                     "",
                     plate.raw_text if plate else result.error,
+                    _plate_type_value(plate.selected_plate_type) if plate else "",
+                    plate.cleaned_text if plate else "",
+                    plate.formatted_text if plate else "",
+                    _format_status_value(plate.format_status) if plate else "",
+                    _detected_format_value(plate.detected_format) if plate else "",
+                    plate.format_reason if plate else "",
+                    plate.manual_correction if plate else "",
                 ]
             )
             _add_file_links(sheet, sheet.max_row, image_col=5, crop_col=14)
@@ -281,7 +359,7 @@ def _write_review_all(sheet, results: list[ImageResult], media_cache: dict[tuple
             "Đã duyệt",
             "Tên file",
             "Đường dẫn ảnh",
-            "Biển số sau review",
+            "Biển số xuất Excel",
             "Biển số OCR",
             "Biển số OCR chuẩn hóa",
             "Độ tin cậy",
@@ -289,7 +367,14 @@ def _write_review_all(sheet, results: list[ImageResult], media_cache: dict[tuple
             "Lý do",
             "Crop đối chiếu",
             "Ảnh crop",
-            "Text OCR thô",
+            "OCR nguyên bản",
+            "Loại biển đã chọn",
+            "Chuỗi đã làm sạch",
+            "Biển số đã định dạng",
+            "Trạng thái định dạng",
+            "Mẫu nhận diện",
+            "Lý do cần kiểm tra",
+            "Đã sửa thủ công",
         ]
     )
 
@@ -303,7 +388,7 @@ def _write_review_all(sheet, results: list[ImageResult], media_cache: dict[tuple
                     "OK" if plate.review_approved else "",
                     result.image_path.name,
                     str(result.image_path),
-                    plate.final_text,
+                    _plate_export_text(plate),
                     plate.text,
                     plate.normalized_text,
                     round(plate.confidence, 1),
@@ -312,6 +397,13 @@ def _write_review_all(sheet, results: list[ImageResult], media_cache: dict[tuple
                     str(plate.crop_path) if plate.crop_path else "",
                     "",
                     plate.raw_text,
+                    _plate_type_value(plate.selected_plate_type),
+                    plate.cleaned_text,
+                    plate.formatted_text,
+                    _format_status_value(plate.format_status),
+                    _detected_format_value(plate.detected_format),
+                    plate.format_reason,
+                    plate.manual_correction,
                 ]
             )
             _add_file_links(sheet, sheet.max_row, image_col=5, crop_col=12)
@@ -362,6 +454,35 @@ def _best_plate(plates: list[PlateCandidate]) -> PlateCandidate | None:
     if not plates:
         return None
     return max(plates, key=lambda item: item.confidence)
+
+
+def _plate_export_text(plate: PlateCandidate) -> str:
+    return plate.export_text if plate.export_text else plate.final_text
+
+
+def _plate_type_value(value: PlateType | str | None) -> str:
+    return coerce_plate_type(value).value
+
+
+def _format_status_value(value: PlateFormatStatus | str | None) -> str:
+    try:
+        return PlateFormatStatus(str(value or PlateFormatStatus.DISABLED)).value
+    except ValueError:
+        return PlateFormatStatus.DISABLED.value
+
+
+def _detected_format_value(value: DetectedPlateFormat | str | None) -> str:
+    try:
+        return DetectedPlateFormat(str(value or DetectedPlateFormat.NONE)).value
+    except ValueError:
+        return DetectedPlateFormat.NONE.value
+
+
+def _is_special_plate(plate: PlateCandidate) -> bool:
+    return (
+        _format_status_value(plate.format_status) == PlateFormatStatus.UNMATCHED.value
+        or _detected_format_value(plate.detected_format) == DetectedPlateFormat.SPECIAL_OR_UNKNOWN.value
+    )
 
 
 def _is_export_plate(plate: PlateCandidate, reviewed: bool) -> bool:
@@ -446,10 +567,10 @@ def _style_sheet(sheet) -> None:
         status = ""
         for cell in row:
             _escape_excel_formula(cell)
-            if cell.value in {"BLURRY", "UNREADABLE", "ERROR"}:
+            if cell.value in {"BLURRY", "UNREADABLE", "ERROR", "UNMATCHED", "SPECIAL_OR_UNKNOWN"}:
                 status = str(cell.value)
             cell.alignment = Alignment(vertical="top", wrap_text=True)
-        if status == "BLURRY":
+        if status in {"BLURRY", "UNMATCHED", "SPECIAL_OR_UNKNOWN"}:
             for cell in row:
                 cell.fill = WARNING_FILL
         elif status in {"UNREADABLE", "ERROR"}:

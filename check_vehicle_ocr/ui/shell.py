@@ -14,9 +14,9 @@ class ApplicationShell:
     """
 
     NAVIGATION = (
-        ("scan", "Quét ảnh", "⌕"),
-        ("results", "Kết quả", "▤"),
-        ("settings", "Cài đặt", "⚙"),
+        ("scan", "Quét ảnh", "scan"),
+        ("results", "Kết quả", "results"),
+        ("settings", "Cài đặt", "settings"),
     )
     PAGE_ALIASES = {
         "session": "results",
@@ -54,7 +54,8 @@ class ApplicationShell:
         ttk.Label(sidebar, text="Check Vehicle", style="AppTitle.TLabel").grid(row=0, column=0, sticky="w")
         ttk.Label(sidebar, text="Nhận diện biển số", style="SurfaceMuted.TLabel").grid(row=1, column=0, sticky="w", pady=(0, 18))
         for row, (page, label, icon) in enumerate(self.NAVIGATION, start=2):
-            button = ttk.Button(sidebar, text=f"{icon}  {label}", style="Nav.TButton", command=lambda name=page: self.show_page(name))
+            image = self.controller.load_ui_icon(icon)
+            button = ttk.Button(sidebar, text=label, image=image, compound="left", style="Nav.TButton", command=lambda name=page: self.show_page(name))
             button.grid(row=row, column=0, sticky="ew", pady=2)
             self.nav_buttons[page] = button
         sidebar.rowconfigure(len(self.NAVIGATION) + 2, weight=1)

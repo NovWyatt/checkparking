@@ -41,7 +41,8 @@ def labelled_entry(parent: ttk.Frame, row: int, label: str, variable: tk.Variabl
 
 
 def labelled_combo(parent: ttk.Frame, row: int, label: str, variable: tk.Variable, values, *, readonly: bool = False) -> ttk.Combobox:
-    ttk.Label(parent, text=label, style="Surface.TLabel").grid(row=row, column=0, sticky="w", pady=4)
+    label_widget = ttk.Label(parent, text=label, style="Surface.TLabel")
+    label_widget.grid(row=row, column=0, sticky="w", pady=4)
     combo = ttk.Combobox(
         parent,
         textvariable=variable,
@@ -51,6 +52,7 @@ def labelled_combo(parent: ttk.Frame, row: int, label: str, variable: tk.Variabl
     )
     combo.configure(postcommand=lambda current=combo: _style_combobox_dropdown(current))
     combo.grid(row=row, column=1, sticky="ew", pady=4)
+    combo.label_widget = label_widget
     return combo
 
 

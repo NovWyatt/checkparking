@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import queue
+import shutil
 import subprocess
 import sys
 import threading
 import time
+import uuid
 from copy import deepcopy
 import tkinter as tk
 from datetime import datetime
@@ -22,10 +25,12 @@ from .excel_export import export_results
 from .gemini_vision import DEFAULT_GEMINI_MODEL, GEMINI_MODEL_CHOICES, GeminiVisionEngine
 from .gpt_vision import DEFAULT_GPT_MODEL, GPT_MODEL_CHOICES, GptVisionEngine
 from .image_io import collect_images, load_image
-from .models import ImageResult, PlateCandidate
-from .ocr import TesseractOcrEngine, find_tesseract, normalize_plate_text, plate_text_metadata
+from .hybrid_review import AiReviewPolicy, coerce_ai_review_policy, result_has_readable_plate, should_send_to_ai
+from .models import BatchSession, ImageResult, PlateCandidate
+from .ocr import TesseractOcrEngine, find_tesseract
 from .paddle_ocr_engine import PaddleOcrEngine
 from .plate_recognizer import DEFAULT_PLATE_RECOGNIZER_REGION, PlateRecognizerEngine
+from .plate_formatting import DetectedPlateFormat, PlateFormatStatus, PlateType, coerce_plate_type
 from .processor import process_image
 from .providers import OpenAICompatibleProvider, ProviderConfig, ProviderStatus, redact_provider_error
 from .services.progress_service import BatchProgress, BatchStatus
@@ -49,6 +54,7 @@ from .update_center import (
     stage_model_archive,
     stage_tesseract_archive,
     stage_local_tesseract_package,
+    validate_tesseract_component,
 )
 from .updater import (
     GitHubRelease,
@@ -135,10 +141,31 @@ HYBRID_ENGINE_MODE = "PaddleOCR + AI Review"
 PADDLE_SCAN_MODE_CHOICES = ("Nhanh", "Cân bằng — Khuyên dùng", "Kỹ")
 PADDLE_SCAN_MODE_DEFAULT = "Cân bằng — Khuyên dùng"
 RECOGNITION_MODES = {"local", "local_ai_review", "online"}
+AI_REVIEW_POLICY_LABELS = {
+    AiReviewPolicy.UNREADABLE_ONLY: "Chỉ khi PaddleOCR không đọc được",
+    AiReviewPolicy.NEEDS_REVIEW: "Khi kết quả cần kiểm tra — Khuyên dùng",
+    AiReviewPolicy.ALL_IMAGES: "Kiểm tra tất cả ảnh — chậm, có thể tốn phí",
+}
 PERFORMANCE_PRESET_LABELS = {
     "AUTO": "Tự động — Khuyên dùng",
     "LOW_MEMORY": "Tiết kiệm RAM",
     "FAST": "Ưu tiên tốc độ",
+}
+PLATE_TYPE_LABELS = {
+    PlateType.MOTORCYCLE: "Xe máy",
+    PlateType.CAR: "Ô tô",
+    PlateType.NONE: "Không tự định dạng",
+}
+PLATE_TYPE_DESCRIPTIONS = {
+    PlateType.MOTORCYCLE: "Tự định dạng thành dạng 59X1-12345 hoặc 59MN-12345.",
+    PlateType.CAR: "Tự định dạng thành dạng 59X-12345.",
+    PlateType.NONE: "Giữ nguyên kết quả OCR và đưa biển đặc biệt vào danh sách kiểm tra.",
+}
+PLATE_FORMAT_STATUS_LABELS = {
+    PlateFormatStatus.FORMATTED: "Đã định dạng",
+    PlateFormatStatus.UNMATCHED: "Biển đặc biệt",
+    PlateFormatStatus.MANUAL: "Đã sửa tay",
+    PlateFormatStatus.DISABLED: "Giữ nguyên",
 }
 UPDATE_SOURCE_LABELS = {
     "disabled": "Tắt cập nhật",
@@ -176,7 +203,7 @@ class _HybridReviewEngine:
 
 
 def _result_has_readable_plate(result: ImageResult) -> bool:
-    return any(plate.readable and plate.final_text for plate in result.plates)
+    return result_has_readable_plate(result)
 
 
 def _needs_online_review(result: ImageResult) -> bool:
@@ -192,6 +219,8 @@ class CheckVehicleApp(tk.Tk):
     def __init__(self) -> None:
         self.settings = load_settings()
         super().__init__()
+        self._ui_icon_images: dict[str, tk.PhotoImage] = {}
+        self._set_window_icon()
         self.title(f"Check Vehicle OCR {__version__}")
         self.geometry("1280x720")
         self.minsize(1024, 640)
@@ -204,7 +233,7 @@ class CheckVehicleApp(tk.Tk):
         self.image_row_map: dict[str, Path] = {}
         self._result_sort_column = "file"
         self._result_sort_descending = False
-        self.detail_row_vars: list[tuple[PlateCandidate, tk.StringVar, tk.BooleanVar]] = []
+        self.detail_row_vars: list[tuple[PlateCandidate, tk.StringVar, tk.BooleanVar, str]] = []
         self.current_detail_result: ImageResult | None = None
         self.selected_image_path: Path | None = None
         self.preview_photo = None
@@ -235,6 +264,8 @@ class CheckVehicleApp(tk.Tk):
         self.ai_config_warning_var = tk.StringVar()
         self.advanced_worker_summary_var = tk.StringVar()
         self.local_ocr_hint_var = tk.StringVar()
+        self.plate_type_hint_var = tk.StringVar()
+        self.reformat_hint_var = tk.StringVar()
         self.export_status_var = tk.StringVar(value="Chưa có dữ liệu để xuất.")
         self.provider_status_var = tk.StringVar(value="Chưa kiểm tra kết nối.")
         self.telegram_status_var = tk.StringVar(value="Telegram đang tắt.")
@@ -249,9 +280,11 @@ class CheckVehicleApp(tk.Tk):
         self.model_update_status_var = tk.StringVar(value="Chưa cấu hình nguồn model")
         self.tesseract_status_var = tk.StringVar(value="Chưa kiểm tra")
         self.batch_progress: BatchProgress | None = None
+        self.current_batch_session: BatchSession | None = None
         self.worker_manager: WorkerManager | None = None
         self.telegram_notifier: AsyncTelegramNotifier | None = None
         self.telegram_percent_sent: set[int] = set()
+        self._telegram_finished_batch_id = ""
         self.current_update_manifest: UpdateManifest | None = None
         self.current_github_release: GitHubRelease | None = None
         self.downloaded_update_path: Path | None = None
@@ -358,6 +391,15 @@ class CheckVehicleApp(tk.Tk):
         if saved_paddle_mode not in PADDLE_SCAN_MODE_CHOICES:
             saved_paddle_mode = PADDLE_SCAN_MODE_DEFAULT
         self.paddle_scan_mode_var = tk.StringVar(value=saved_paddle_mode)
+        saved_plate_type = coerce_plate_type(self.settings.get("last_plate_type"))
+        self.plate_type_choices = tuple(PLATE_TYPE_LABELS.values())
+        self.plate_type_var = tk.StringVar(value=PLATE_TYPE_LABELS[saved_plate_type])
+        saved_ai_review_policy = coerce_ai_review_policy(self.settings.get("ai_review_policy"))
+        self.ai_review_policy_choices = tuple(AI_REVIEW_POLICY_LABELS.values())
+        self.ai_review_policy_var = tk.StringVar(value=AI_REVIEW_POLICY_LABELS[saved_ai_review_policy])
+        self.ai_review_policy_hint_var = tk.StringVar()
+        self.ai_review_policy_combo: ttk.Combobox | None = None
+        self.ai_review_policy_hint_label: ttk.Label | None = None
 
         provider_configs = self.settings.get("provider_configs") if isinstance(self.settings.get("provider_configs"), dict) else {}
         custom_provider = provider_configs.get("custom_openai") if isinstance(provider_configs.get("custom_openai"), dict) else {}
@@ -386,7 +428,10 @@ class CheckVehicleApp(tk.Tk):
         self.telegram_mask_plate_var = tk.BooleanVar(value=bool(telegram_settings.get("mask_plate_number", False)))
 
         update_settings = self.settings.get("updates") if isinstance(self.settings.get("updates"), dict) else {}
-        embedded_release_repository = GITHUB_REPOSITORY if getattr(sys, "frozen", False) else ""
+        # Source and frozen builds both use the repository recorded in release
+        # metadata.  A fresh profile therefore has a safe first-party source
+        # without asking a normal operator to copy a URL.
+        embedded_release_repository = GITHUB_REPOSITORY
         raw_update_source_mode = update_settings.get("source_mode")
         saved_update_source_mode = str(raw_update_source_mode or "").strip().lower()
         if saved_update_source_mode not in {"disabled", "github", "manifest"}:
@@ -415,6 +460,11 @@ class CheckVehicleApp(tk.Tk):
         self.detail_meta_var = tk.StringVar(value="")
 
         self._build_ui()
+        # Some frozen Windows ttk sessions finish creating radiobutton elements
+        # after the first style pass. Reapply once the initial Scan page exists
+        # so a dark-mode cold start has the same readable controls as a theme
+        # toggle during a running source session.
+        self._configure_style()
         self._bind_settings()
         self._settings_ready = True
         self.status_var.trace_add("write", lambda *_args: self._update_header_status())
@@ -423,12 +473,16 @@ class CheckVehicleApp(tk.Tk):
         self.recognition_mode_var.trace_add("write", lambda *_args: self._on_recognition_mode_changed())
         self.performance_preset_var.trace_add("write", lambda *_args: self._on_performance_preset_changed())
         self.paddle_scan_mode_var.trace_add("write", lambda *_args: self._update_scan_mode_hint())
+        self.plate_type_var.trace_add("write", lambda *_args: self._on_plate_type_changed())
+        self.ai_review_policy_var.trace_add("write", lambda *_args: self._on_ai_review_policy_changed())
         self.gpt_model_var.trace_add("write", lambda *_args: self._update_header_status())
         self.gemini_model_var.trace_add("write", lambda *_args: self._update_header_status())
         self.custom_model_var.trace_add("write", lambda *_args: self._update_header_status())
         self._apply_performance_preset()
         self._on_recognition_mode_changed()
         self._update_scan_mode_hint()
+        self._on_plate_type_changed()
+        self._on_ai_review_policy_changed()
         self._update_header_status()
         self._sync_local_ocr_control()
         self._update_key_status()
@@ -444,6 +498,9 @@ class CheckVehicleApp(tk.Tk):
                 self.show_settings_section("updates")
             else:
                 self.show_page(ui_review_page)
+        ui_assertion_path = os.environ.get("CHECK_VEHICLE_UI_ASSERT_PATH", "").strip()
+        if ui_assertion_path:
+            self.after_idle(lambda path=ui_assertion_path: self._write_ui_assertion(Path(path)))
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self._drain_after_id = self.after(100, self._drain_events)
 
@@ -455,6 +512,53 @@ class CheckVehicleApp(tk.Tk):
         self._configure_style()
         self.shell = ApplicationShell(self, self)
         self._bind_shortcuts()
+
+    def _write_ui_assertion(self, destination: Path) -> None:
+        """Write a minimal packaged-UI assertion only when a harness requests it."""
+        try:
+            scan = self.shell.pages.get("scan")
+            combo = getattr(scan, "plate_type_combo", None)
+            values = list(combo.cget("values")) if combo is not None else []
+            payload = {"version": __version__, "plate_type_label": "Loại biển số", "plate_type_values": values}
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        except OSError:
+            return
+
+    @staticmethod
+    def _asset_path(*parts: str) -> Path:
+        root = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[1]))
+        return root.joinpath("assets", *parts)
+
+    def _set_window_icon(self) -> None:
+        icon = self._asset_path("icons", "app-icon.ico")
+        try:
+            if icon.is_file():
+                self.iconbitmap(default=str(icon))
+        except tk.TclError:
+            pass
+        png = self._asset_path("icons", "app-icon-64.png")
+        try:
+            if png.is_file():
+                photo = tk.PhotoImage(file=str(png))
+                self._ui_icon_images["app"] = photo
+                self.iconphoto(True, photo)
+        except tk.TclError:
+            pass
+
+    def load_ui_icon(self, name: str) -> tk.PhotoImage | None:
+        cached = self._ui_icon_images.get(name)
+        if cached is not None:
+            return cached
+        path = self._asset_path("icons", f"{name}.png")
+        try:
+            if path.is_file():
+                image = tk.PhotoImage(file=str(path))
+                self._ui_icon_images[name] = image
+                return image
+        except tk.TclError:
+            pass
+        return None
 
     def _configure_style(self) -> None:
         configure_styles(self, self.colors, initialize_theme=not self._theme_initialized)
@@ -702,6 +806,7 @@ class CheckVehicleApp(tk.Tk):
     def clear_all(self) -> None:
         self.images.clear()
         self.results.clear()
+        self.current_batch_session = None
         self.image_row_map.clear()
         self.selected_image_path = None
         self.current_detail_result = None
@@ -742,6 +847,42 @@ class CheckVehicleApp(tk.Tk):
         self.tesseract_status_var.set(f"{message} Không bắt buộc khi PaddleOCR hoạt động.")
         self._schedule_settings_save()
 
+    @staticmethod
+    def _tesseract_component_root() -> Path:
+        return settings_path().parent / "components" / "tesseract"
+
+    def install_tesseract_component(self) -> None:
+        """Use the one-click path only when the project has a verified manifest."""
+        if self.tesseract_manifest_url_var.get().strip():
+            self.stage_tesseract_from_manifest()
+        else:
+            self.manage_tesseract()
+
+    def uninstall_managed_tesseract(self) -> None:
+        path = Path(self.tesseract_var.get().strip())
+        root = self._tesseract_component_root().resolve()
+        try:
+            managed = path.resolve().is_relative_to(root)
+        except (OSError, ValueError):
+            managed = False
+        if not managed:
+            self.tesseract_status_var.set("Chỉ có thể gỡ Tesseract do ứng dụng đã cài; bản bạn tự chọn sẽ không bị xóa.")
+            return
+        version_dir = next((parent for parent in path.parents if parent.parent == root), None)
+        if version_dir is None or not version_dir.is_dir():
+            self.tesseract_status_var.set("Không xác định được thư mục Tesseract do ứng dụng quản lý.")
+            return
+        try:
+            shutil.rmtree(version_dir)
+        except OSError:
+            self.tesseract_status_var.set("Không thể gỡ Tesseract đang dùng. Hãy đóng mọi tiến trình liên quan rồi thử lại.")
+            return
+        previous = self.tesseract_previous_path_var.get().strip()
+        self.tesseract_var.set(previous if Path(previous).is_file() else "")
+        self.tesseract_previous_path_var.set("")
+        self.tesseract_status_var.set("Đã gỡ Tesseract dự phòng do ứng dụng cài đặt.")
+        self._schedule_settings_save()
+
     def rollback_tesseract(self) -> None:
         previous = Path(self.tesseract_previous_path_var.get().strip())
         if not previous.is_file():
@@ -765,11 +906,12 @@ class CheckVehicleApp(tk.Tk):
         ttk.Button(body, text="Chọn tesseract.exe", command=self.choose_tesseract, style="Primary.TButton").grid(row=2, column=0, sticky="ew", padx=(0, 4))
         ttk.Button(body, text="Chọn thư mục portable", command=self.choose_tesseract_folder).grid(row=2, column=1, sticky="ew", padx=(4, 0))
         ttk.Button(body, text="Chọn gói đã tải", command=self.choose_tesseract_package).grid(row=3, column=0, sticky="ew", pady=(8, 0), padx=(0, 4))
-        verified_action = ttk.Button(body, text="Tải gói đã xác minh", command=self.stage_tesseract_from_manifest)
+        verified_action = ttk.Button(body, text="Cài đặt", command=self.install_tesseract_component, style="Primary.TButton")
         verified_action.grid(row=3, column=1, sticky="ew", pady=(8, 0), padx=(4, 0))
         ttk.Button(body, text="Quay lại bản trước", command=self.rollback_tesseract).grid(row=4, column=0, sticky="w", pady=(8, 0))
+        ttk.Button(body, text="Gỡ Tesseract", command=self.uninstall_managed_tesseract).grid(row=4, column=1, sticky="e", pady=(8, 0))
         ttk.Label(body, textvariable=self.tesseract_status_var, style="Muted.TLabel", wraplength=440).grid(row=5, column=0, columnspan=2, sticky="w", pady=(12, 0))
-        ttk.Label(body, text="Nguồn gói xác minh được cấu hình trong Chi tiết kỹ thuật của Cập nhật.", style="Muted.TLabel", wraplength=440).grid(row=6, column=0, columnspan=2, sticky="w", pady=(6, 0))
+        ttk.Label(body, text="Nếu chưa có nguồn gói xác minh, bạn vẫn có thể chọn bản đã cài; ứng dụng không tự tải installer bên thứ ba.", style="Muted.TLabel", wraplength=440).grid(row=6, column=0, columnspan=2, sticky="w", pady=(6, 0))
         body.columnconfigure((0, 1), weight=1)
 
     def choose_tesseract_package(self) -> None:
@@ -785,7 +927,8 @@ class CheckVehicleApp(tk.Tk):
         def worker() -> None:
             try:
                 manifest = fetch_tesseract_manifest(manifest_url)
-                executable = stage_local_tesseract_package(Path(selected), manifest, self.paddle_runtime_manager.runtime_root / "tesseract-staging")
+                executable = stage_local_tesseract_package(Path(selected), manifest, self._tesseract_component_root())
+                validate_tesseract_component(executable)
             except Exception:
                 self.event_queue.put(("tesseract_status", "Không thể xác minh gói Tesseract đã chọn. Runtime hiện tại không thay đổi."))
             else:
@@ -803,7 +946,8 @@ class CheckVehicleApp(tk.Tk):
         def worker() -> None:
             try:
                 manifest = fetch_tesseract_manifest(manifest_url)
-                executable = stage_tesseract_archive(manifest, self.paddle_runtime_manager.runtime_root / "tesseract-staging")
+                executable = stage_tesseract_archive(manifest, self._tesseract_component_root())
+                validate_tesseract_component(executable)
             except Exception:
                 self.event_queue.put(("tesseract_status", "Không thể tải hoặc xác minh gói Tesseract. Bản hiện tại vẫn được giữ nguyên."))
             else:
@@ -860,8 +1004,22 @@ class CheckVehicleApp(tk.Tk):
 
         if not retry_failed:
             self.retry_failed_before_count = 0
+            batch_session = BatchSession(
+                batch_id=uuid.uuid4().hex,
+                selected_plate_type=self._selected_plate_type(),
+                started_at=datetime.now().astimezone().isoformat(timespec="seconds"),
+                total_images=len(target_images),
+            )
+            self.current_batch_session = batch_session
         else:
             self.retry_failed_before_count = len(target_images)
+            batch_session = self.current_batch_session or BatchSession(
+                batch_id=uuid.uuid4().hex,
+                selected_plate_type=self._selected_plate_type(),
+                started_at=datetime.now().astimezone().isoformat(timespec="seconds"),
+                total_images=len(target_images),
+            )
+            self.current_batch_session = batch_session
         self.progress.configure(maximum=len(target_images), value=0)
         self.start_button.configure(state="disabled")
         self.stop_button.configure(state="normal")
@@ -876,7 +1034,7 @@ class CheckVehicleApp(tk.Tk):
         self.stop_event.clear()
 
         worker_settings = self._worker_settings(engine_mode, len(target_images))
-        self.batch_progress = BatchProgress(total=len(target_images), configured_workers={})
+        self.batch_progress = BatchProgress(total=len(target_images), configured_workers={}, batch_id=batch_session.batch_id)
         self.batch_progress.preparing_model()
         self.telegram_percent_sent.clear()
         self._start_telegram_lifecycle(len(target_images), engine_mode)
@@ -901,6 +1059,7 @@ class CheckVehicleApp(tk.Tk):
             retry_failed,
             self._custom_provider_snapshot(),
             bool(self.tesseract_fallback_enabled_var.get()),
+            batch_session,
         )
         self.worker = threading.Thread(target=self._worker_process, args=args, daemon=True)
         self.worker.start()
@@ -936,6 +1095,7 @@ class CheckVehicleApp(tk.Tk):
         retry_failed: bool = False,
         custom_provider: dict[str, object] | None = None,
         tesseract_fallback_enabled: bool = False,
+        batch_session: BatchSession | None = None,
     ) -> None:
         crop_dir = output_path.with_suffix("").parent / f"{output_path.stem}_crops"
         try:
@@ -960,9 +1120,27 @@ class CheckVehicleApp(tk.Tk):
                 api_workers=max(1, int(worker_settings)),
                 queue_capacity=max(2, len(images)),
             )
+            if engine_mode == HYBRID_ENGINE_MODE:
+                self._run_hybrid_pipeline(
+                    images=images,
+                    engine=engine,
+                    crop_dir=crop_dir,
+                    output_path=output_path,
+                    settings=settings,
+                    blur_threshold=blur_threshold,
+                    confidence_threshold=confidence_threshold,
+                    paddle_scan_mode=paddle_scan_mode,
+                    retry_failed=retry_failed,
+                    batch_session=batch_session,
+                )
+                return
             manager = WorkerManager(settings, engine_mode, self.stop_event)
             self.worker_manager = manager
-            progress = BatchProgress(total=len(images), configured_workers=manager.configured_workers)
+            progress = BatchProgress(
+                total=len(images),
+                configured_workers=manager.configured_workers,
+                batch_id=batch_session.batch_id if batch_session else uuid.uuid4().hex,
+            )
             self.batch_progress = progress
             progress.preparing_model()
             self.event_queue.put(("engine_ready", engine_mode, len(images), manager.configured_workers, retry_failed))
@@ -1019,6 +1197,10 @@ class CheckVehicleApp(tk.Tk):
                 else:
                     result = outcome
                     outcome_name = "success" if result.status == "OK" else ("failed" if result.status == "ERROR" else "review")
+                if batch_session is not None:
+                    self._apply_batch_formatting(result, batch_session)
+                    if outcome_name == "success" and any(plate.needs_review for plate in result.plates):
+                        outcome_name = "review"
                 progress.mark_finished(item.value.name, pool, outcome_name)
                 snapshot = progress.snapshot()
                 self.event_queue.put(("retry_result" if retry_failed else "result", progress.completed, len(images), result, snapshot))
@@ -1040,6 +1222,169 @@ class CheckVehicleApp(tk.Tk):
                 self.batch_progress.finish(fatal=True)
                 self.event_queue.put(("progress", self.batch_progress.snapshot()))
             self.event_queue.put(("error", str(exc)))
+
+    def _run_hybrid_pipeline(
+        self,
+        *,
+        images: list[Path],
+        engine: _HybridReviewEngine,
+        crop_dir: Path,
+        output_path: Path,
+        settings: WorkerSettings,
+        blur_threshold: float,
+        confidence_threshold: float,
+        paddle_scan_mode: str,
+        retry_failed: bool,
+        batch_session: BatchSession | None,
+    ) -> None:
+        """Run all local OCR first, then a bounded AI-review pass.
+
+        Final completion is intentionally separate from local OCR completion.
+        This prevents a finished local queue from rendering as a completed
+        batch while AI or result aggregation is still outstanding.
+        """
+
+        local_manager = WorkerManager(settings, "PaddleOCR Local", self.stop_event)
+        self.worker_manager = local_manager
+        progress = BatchProgress(
+            total=len(images),
+            configured_workers=local_manager.configured_workers,
+            batch_id=batch_session.batch_id if batch_session else uuid.uuid4().hex,
+        )
+        self.batch_progress = progress
+        progress.preparing_model()
+        self.event_queue.put(("engine_ready", HYBRID_ENGINE_MODE, len(images), local_manager.configured_workers, retry_failed))
+        progress.start()
+        local_results: list[ImageResult | None] = [None] * len(images)
+        final_results: list[ImageResult | None] = [None] * len(images)
+        last_progress_event = 0.0
+
+        def emit_progress(*, force: bool = False) -> None:
+            nonlocal last_progress_event
+            now = time.monotonic()
+            if force or now - last_progress_event >= 0.12:
+                self.event_queue.put(("progress", progress.snapshot()))
+                last_progress_event = now
+
+        def outcome_name(result: ImageResult) -> str:
+            if result.status == "ERROR":
+                return "failed"
+            return "review" if result.status != "OK" or any(plate.needs_review for plate in result.plates) else "success"
+
+        def emit_final(index: int, result: ImageResult, *, used_ai: bool = False, ai_failed: bool = False) -> None:
+            if batch_session is not None:
+                self._apply_batch_formatting(result, batch_session)
+            final_results[index] = result
+            progress.hybrid_finish_result(outcome_name(result), used_ai=used_ai, ai_failed=ai_failed)
+            snapshot = progress.snapshot()
+            self.event_queue.put(("retry_result" if retry_failed else "result", progress.completed, len(images), result, snapshot))
+            emit_progress()
+
+        def local_prepare(image: Path):
+            image_bgr, image_size = load_image(image)
+            return image, image_bgr, image_size
+
+        def local_infer(prepared):
+            image, image_bgr, image_size = prepared
+            return process_image(
+                image,
+                crop_dir,
+                engine.local_engine,
+                blur_threshold,
+                max(20.0, confidence_threshold - 10.0),
+                paddle_scan_mode=paddle_scan_mode,
+                image_bgr=image_bgr,
+                image_size=image_size,
+            )
+
+        def on_local_started(item: WorkItem[Path], _pool: str) -> None:
+            progress.hybrid_local_started(item.value.name)
+            emit_progress()
+
+        def on_local_finished(item: WorkItem[Path], outcome: ImageResult | Exception, _pool: str) -> None:
+            if isinstance(outcome, Exception):
+                result = ImageResult(item.value, "ERROR", "Không thể xử lý ảnh", error=str(outcome))
+            else:
+                result = outcome
+            if batch_session is not None:
+                self._apply_batch_formatting(result, batch_session)
+            local_results[item.index] = result
+            progress.hybrid_local_finished(item.value.name)
+            emit_progress()
+
+        local_started_at = time.monotonic()
+        local_manager.run_pipeline(images, local_prepare, local_infer, on_started=on_local_started, on_finished=on_local_finished)
+        progress.local_elapsed_seconds = max(0.0, time.monotonic() - local_started_at)
+
+        available_locals = [(index, result) for index, result in enumerate(local_results) if result is not None]
+        if self.stop_event.is_set():
+            progress.hybrid_start_finalization()
+            for index, result in available_locals:
+                emit_final(index, result)
+            progress.finish(cancelled=True)
+            emit_progress(force=True)
+            self.event_queue.put(("done_retry_stopped" if retry_failed else "done_scan_stopped", [item for item in final_results if item], progress.snapshot()))
+            return
+
+        policy = self._selected_ai_review_policy()
+        ai_candidates: list[tuple[int, ImageResult, str]] = []
+        for index, result in available_locals:
+            send_to_ai, reason = should_send_to_ai(result, policy, confidence_threshold=confidence_threshold)
+            if send_to_ai and result.status != "ERROR":
+                ai_candidates.append((index, result, reason))
+            else:
+                emit_final(index, result)
+
+        if ai_candidates:
+            progress.hybrid_queue_ai(len(ai_candidates))
+            emit_progress(force=True)
+            api_manager = WorkerManager(settings, "OpenAI Compatible", self.stop_event)
+            self.worker_manager = api_manager
+
+            def api_prepare(candidate: tuple[int, ImageResult, str]):
+                return candidate
+
+            def api_infer(candidate: tuple[int, ImageResult, str]):
+                index, local_result, _reason = candidate
+                return index, local_result, engine.online_engine.analyze_image(local_result.image_path, blur_threshold)
+
+            def on_ai_started(item: WorkItem[tuple[int, ImageResult, str]], _pool: str) -> None:
+                progress.hybrid_ai_started(item.value[1].image_path.name)
+                emit_progress()
+
+            def on_ai_finished(item: WorkItem[tuple[int, ImageResult, str]], outcome, _pool: str) -> None:
+                index, local_result, reason = item.value
+                filename = local_result.image_path.name
+                if isinstance(outcome, Exception):
+                    local_result.warnings.append("AI trực tuyến không kiểm tra được ảnh này; giữ kết quả PaddleOCR để kiểm tra.")
+                    progress.hybrid_ai_finished(filename, improved=False, failed=True)
+                    emit_final(index, local_result, used_ai=True, ai_failed=True)
+                    return
+                _returned_index, _returned_local, online_result = outcome
+                improved = result_has_readable_plate(online_result)
+                progress.hybrid_ai_finished(filename, improved=improved)
+                if improved:
+                    online_result.warnings.append(f"AI trực tuyến đã kiểm tra ảnh này: {reason}")
+                    emit_final(index, online_result, used_ai=True)
+                else:
+                    local_result.warnings.append("AI trực tuyến không cải thiện kết quả; giữ PaddleOCR để kiểm tra.")
+                    emit_final(index, local_result, used_ai=True)
+
+            ai_started_at = time.monotonic()
+            api_manager.run_pipeline(ai_candidates, api_prepare, api_infer, on_started=on_ai_started, on_finished=on_ai_finished)
+            progress.ai_elapsed_seconds = max(0.0, time.monotonic() - ai_started_at)
+
+        if self.stop_event.is_set():
+            progress.finish(cancelled=True)
+            event_name = "done_retry_stopped" if retry_failed else "done_scan_stopped"
+        else:
+            progress.hybrid_start_finalization()
+            progress.finish()
+            event_name = "done_retry" if retry_failed else "done_scan"
+        emit_progress(force=True)
+        if getattr(engine.online_engine, "last_api_mode", ""):
+            self.event_queue.put(("provider_capability", engine.online_engine.last_api_mode))
+        self.event_queue.put((event_name, [item for item in final_results if item], progress.snapshot()))
 
     @staticmethod
     def _make_engine(
@@ -1414,7 +1759,7 @@ class CheckVehicleApp(tk.Tk):
                     if path is None:
                         self.tesseract_status_var.set("Chưa cài. Có gói Tesseract dự phòng đã xác minh.")
                         if self.tesseract_manage_button:
-                            self.tesseract_manage_button.configure(text="Cài hoặc chọn", command=self.manage_tesseract)
+                            self.tesseract_manage_button.configure(text="Cài đặt", command=self.install_tesseract_component)
                     else:
                         self.tesseract_status_var.set(f"Đã cài. Có gói dự phòng {manifest.version} để thử.")
                         if self.tesseract_manage_button:
@@ -1476,6 +1821,37 @@ class CheckVehicleApp(tk.Tk):
             else:
                 label.grid_remove()
         self._sync_local_ocr_control()
+        self._update_ai_review_policy_control()
+
+    def _selected_ai_review_policy(self) -> AiReviewPolicy:
+        selected_label = self.ai_review_policy_var.get().strip()
+        for policy, label in AI_REVIEW_POLICY_LABELS.items():
+            if selected_label == label:
+                return policy
+        return AiReviewPolicy.NEEDS_REVIEW
+
+    def _on_ai_review_policy_changed(self) -> None:
+        policy = self._selected_ai_review_policy()
+        if policy is AiReviewPolicy.UNREADABLE_ONLY:
+            hint = "Chỉ gửi ảnh khi PaddleOCR chưa đọc được biển số rõ ràng."
+        elif policy is AiReviewPolicy.ALL_IMAGES:
+            hint = "AI sẽ nhận mọi ảnh; chế độ này chậm hơn và có thể phát sinh chi phí."
+        else:
+            hint = "Chỉ gửi ảnh mờ, độ tin cậy thấp, biển đặc biệt hoặc có kết quả mâu thuẫn."
+        self.ai_review_policy_hint_var.set(hint)
+        self._update_ai_review_policy_control()
+
+    def _update_ai_review_policy_control(self) -> None:
+        visible = self.recognition_mode_var.get().strip() == "local_ai_review"
+        combo = self.ai_review_policy_combo
+        hint = self.ai_review_policy_hint_label
+        if combo is not None:
+            (combo.grid if visible else combo.grid_remove)()
+            label_widget = getattr(combo, "label_widget", None)
+            if label_widget is not None:
+                (label_widget.grid if visible else label_widget.grid_remove)()
+        if hint is not None:
+            (hint.grid if visible else hint.grid_remove)()
 
     def _online_provider_ready(self) -> bool:
         return bool(
@@ -1542,6 +1918,83 @@ class CheckVehicleApp(tk.Tk):
             self.scan_mode_hint_var.set("Thử thêm nhiều cách xử lý cho ảnh khó, sẽ chậm hơn.")
         else:
             self.scan_mode_hint_var.set("Phù hợp hầu hết trường hợp.")
+
+    def _selected_plate_type(self) -> PlateType:
+        selected_label = self.plate_type_var.get().strip()
+        for plate_type, label in PLATE_TYPE_LABELS.items():
+            if selected_label == label:
+                return plate_type
+        return PlateType.NONE
+
+    def _on_plate_type_changed(self) -> None:
+        plate_type = self._selected_plate_type()
+        self.plate_type_hint_var.set(PLATE_TYPE_DESCRIPTIONS[plate_type])
+        self._update_reformat_action()
+
+    def _apply_batch_formatting(self, result: ImageResult, batch_session: BatchSession) -> None:
+        """Attach immutable batch metadata and formatter output after OCR."""
+
+        result.batch_id = batch_session.batch_id
+        result.selected_plate_type = batch_session.selected_plate_type
+        result.batch_started_at = batch_session.started_at
+        result.batch_total_images = batch_session.total_images
+        for plate in result.plates:
+            plate.apply_plate_formatting(batch_session.selected_plate_type)
+
+    def _update_reformat_action(self) -> None:
+        button = getattr(self, "reformat_results_button", None)
+        hint_label = getattr(self, "reformat_hint_label", None)
+        selected_type = self._selected_plate_type()
+        needs_reformat = bool(self.results) and any(
+            coerce_plate_type(result.selected_plate_type) is not selected_type for result in self.results
+        )
+        if needs_reformat:
+            self.reformat_hint_var.set("Loại biển đang chọn khác batch đã quét. Chỉ áp dụng khi bạn bấm định dạng lại.")
+            if button is not None:
+                button.grid()
+            if hint_label is not None:
+                hint_label.grid()
+        else:
+            self.reformat_hint_var.set("")
+            if button is not None:
+                button.grid_remove()
+            if hint_label is not None:
+                hint_label.grid_remove()
+
+    def reformat_current_results(self) -> None:
+        """Re-run only the pure formatter for current in-memory results."""
+
+        if not self.results:
+            self._notify("Chưa có kết quả để áp dụng lại định dạng.", "info")
+            return
+        if self.worker and self.worker.is_alive():
+            self._notify("Hãy chờ batch hiện tại hoàn tất trước khi áp dụng lại định dạng.", "warning")
+            return
+        self._save_detail_edits()
+        selected_type = self._selected_plate_type()
+        fallback_session = self.current_batch_session or BatchSession(
+            batch_id=uuid.uuid4().hex,
+            selected_plate_type=selected_type,
+            started_at=datetime.now().astimezone().isoformat(timespec="seconds"),
+            total_images=len(self.results),
+        )
+        for result in self.results:
+            batch_session = BatchSession(
+                batch_id=result.batch_id or fallback_session.batch_id,
+                selected_plate_type=selected_type,
+                started_at=result.batch_started_at or fallback_session.started_at,
+                total_images=result.batch_total_images or fallback_session.total_images,
+            )
+            self._apply_batch_formatting(result, batch_session)
+        self.current_batch_session = BatchSession(
+            batch_id=fallback_session.batch_id,
+            selected_plate_type=selected_type,
+            started_at=fallback_session.started_at,
+            total_images=fallback_session.total_images,
+        )
+        self._refresh_table()
+        self.status_var.set("Đã áp dụng lại định dạng, không chạy lại OCR.")
+        self._notify("Đã áp dụng lại định dạng cho kết quả hiện tại.", "success")
 
     def export_selected_results(self) -> None:
         if self.export_reviewed_only_var.get():
@@ -1614,15 +2067,50 @@ class CheckVehicleApp(tk.Tk):
         self.progress.configure(maximum=max(1, total), value=completed)
         status = str(snapshot.get("status") or "")
         percent = int(snapshot.get("percent") or 0)
-        self.progress_primary_var.set(f"{_display_batch_status(status)}: {completed}/{total} ảnh ({percent}%)")
+        terminal = status in {BatchStatus.COMPLETED.value, BatchStatus.COMPLETED_WITH_ERRORS.value, BatchStatus.CANCELLED.value, BatchStatus.FAILED.value}
+        phase = str(snapshot.get("phase") or "")
+        local_completed = int(snapshot.get("local_completed") or 0)
+        ai_queued = int(snapshot.get("ai_queued") or 0)
+        ai_active = int(snapshot.get("ai_active") or 0)
+        ai_completed = int(snapshot.get("ai_completed") or 0)
+        ai_total = ai_queued + ai_active + ai_completed
+        if phase == "local_ocr" and local_completed:
+            primary = f"OCR cục bộ: {local_completed}/{total} ảnh"
+        elif phase in {"ai_waiting", "ai_review"} and ai_total:
+            primary = f"Hoàn tất cuối: {completed}/{total} • AI kiểm tra: {ai_completed}/{ai_total}"
+        elif phase == "finalizing" and not terminal:
+            primary = f"Đang tổng hợp kết quả: {completed}/{total} ảnh"
+        else:
+            primary = f"{_display_batch_status(status)}: {completed}/{total} ảnh ({percent}%)"
+        self.progress_primary_var.set(primary)
         elapsed = float(snapshot.get("elapsed_seconds") or 0.0)
         rate = float(snapshot.get("images_per_minute") or 0.0)
         eta = snapshot.get("eta_seconds")
-        eta_text = "ETA đang tính" if eta is None else f"ETA {self._format_duration(float(eta))}"
+        eta_text = "—" if terminal else ("ETA đang tính" if eta is None else f"ETA {self._format_duration(float(eta))}")
         self.progress_timing_var.set(f"Đã chạy {self._format_duration(elapsed)} • {rate:.1f} ảnh/phút • {eta_text}")
         active_workers = snapshot.get("active_workers") if isinstance(snapshot.get("active_workers"), dict) else {}
-        self.progress_workers_var.set("Đang xử lý" if active_workers else "Đang chờ")
-        current = ", ".join(str(value) for value in list(snapshot.get("current_files") or [])[:3]) or "Đang chờ task tiếp theo"
+        if terminal:
+            self.progress.configure(style="Success.Horizontal.TProgressbar" if status.startswith("COMPLETED") else "Horizontal.TProgressbar")
+            self.progress_workers_var.set("Đã hoàn tất" if status.startswith("COMPLETED") else _display_batch_status(status))
+            self.progress_detail_var.set(
+                f"PaddleOCR: {snapshot.get('local_only', completed)} ảnh cục bộ • AI: {ai_completed} ảnh • "
+                f"Cần kiểm tra {snapshot.get('needs_review', 0)} • Lỗi {snapshot.get('failed', 0)}"
+            )
+            return
+        self.progress.configure(style="Horizontal.TProgressbar")
+        if phase == "ai_waiting":
+            self.progress_workers_var.set(f"AI đang chờ kiểm tra {ai_queued} ảnh")
+        elif phase == "ai_review":
+            self.progress_workers_var.set(f"AI đang kiểm tra {ai_active} ảnh")
+        elif phase == "finalizing":
+            self.progress_workers_var.set("Đang tổng hợp kết quả")
+        else:
+            self.progress_workers_var.set("Đang xử lý" if active_workers else "Đang chuẩn bị")
+        current = ", ".join(str(value) for value in list(snapshot.get("current_files") or [])[:3])
+        if phase == "ai_review" and local_completed:
+            current = f"OCR cục bộ đã xong {local_completed}/{total} • AI đang kiểm tra {ai_active}/{max(ai_total, ai_active)} ảnh"
+        elif not current:
+            current = "Đang chờ bước xử lý tiếp theo"
         self.progress_detail_var.set(
             f"{current} • Thành công {snapshot.get('succeeded', 0)} • Cần kiểm tra {snapshot.get('needs_review', 0)} • Lỗi {snapshot.get('failed', 0)}"
         )
@@ -1647,6 +2135,7 @@ class CheckVehicleApp(tk.Tk):
         )
 
     def _start_telegram_lifecycle(self, total: int, engine_mode: str) -> None:
+        self._telegram_finished_batch_id = ""
         if self.telegram_notifier:
             self.telegram_notifier.close()
             self.telegram_notifier = None
@@ -1684,6 +2173,11 @@ class CheckVehicleApp(tk.Tk):
         )
 
     def _finish_telegram_lifecycle(self, outcome: str, error: str = "") -> None:
+        batch_id = str(self.ui_state.batch_snapshot.get("batch_id") or (self.batch_progress.batch_id if self.batch_progress else ""))
+        if batch_id and self._telegram_finished_batch_id == batch_id:
+            return
+        if batch_id:
+            self._telegram_finished_batch_id = batch_id
         notifier = self.telegram_notifier
         if not notifier:
             return
@@ -1887,8 +2381,9 @@ class CheckVehicleApp(tk.Tk):
 
     def refresh_update_center_state(self) -> None:
         runtime = paddle_runtime_info()
-        self.paddle_runtime_var.set(f"Đang dùng PaddleOCR {runtime.paddleocr_version}")
-        self.paddle_compatibility_var.set("Sẽ thử nghiệm riêng trước khi dùng bản mới.")
+        self.paddle_runtime_var.set(f"Đang dùng: PaddleOCR {runtime.paddleocr_version}")
+        self.paddle_update_status_var.set(f"Mới nhất đã kiểm thử: đi kèm Check Vehicle OCR {__version__}.")
+        self.paddle_compatibility_var.set("PaddleOCR chỉ thay đổi cùng bản phát hành ứng dụng đã qua kiểm thử.")
         inventory = paddle_model_inventory()
         active = [item.name for item in inventory if item.active]
         self.model_inventory_var.set(" • ".join(active) if active else "Chưa tìm thấy model OCR cục bộ")
@@ -1901,6 +2396,7 @@ class CheckVehicleApp(tk.Tk):
             self.update_status_var.set("Chưa cấu hình nguồn cập nhật ứng dụng.")
             self._set_update_primary_action("Thiết lập nguồn", self.configure_update_source)
         elif not self.current_update_manifest and not self.downloaded_update_path:
+            self.update_status_var.set("Sẵn sàng kiểm tra bản mới.")
             self._set_update_primary_action("Kiểm tra", self.check_for_updates)
 
     def check_paddle_updates(self) -> None:
@@ -2035,14 +2531,13 @@ class CheckVehicleApp(tk.Tk):
     def check_all_updates(self) -> None:
         """Run only checks in background; no download, install, or model change."""
         self.update_status_var.set("Đang kiểm tra…" if self._has_configured_update_source() else "Chưa cấu hình nguồn cập nhật ứng dụng.")
-        self.paddle_update_status_var.set("Đang kiểm tra…")
+        self.paddle_update_status_var.set(f"Đang dùng bản nhận diện đã kiểm thử cùng Check Vehicle OCR {__version__}.")
         self.model_update_status_var.set("Đang đọc trạng thái…")
         self.tesseract_status_var.set("Đang kiểm tra…")
         if self._has_configured_update_source():
             self.check_for_updates()
         else:
             self._set_update_primary_action("Thiết lập nguồn", self.configure_update_source)
-        self.check_paddle_updates()
         self.refresh_update_center_state()
         self.check_tesseract_package()
 
@@ -2051,9 +2546,9 @@ class CheckVehicleApp(tk.Tk):
             return
         path = find_tesseract(self.tesseract_var.get().strip() or None)
         if path is None:
-            self.tesseract_status_var.set("Chưa cài. Không bắt buộc khi PaddleOCR hoạt động.")
+            self.tesseract_status_var.set("Chưa cài")
             if self.tesseract_manage_button:
-                self.tesseract_manage_button.configure(text="Cài hoặc chọn", command=self.manage_tesseract)
+                self.tesseract_manage_button.configure(text="Cài đặt", command=self.install_tesseract_component)
             return
         if self.tesseract_manage_button:
             if self.current_tesseract_manifest is not None:
@@ -2124,7 +2619,7 @@ class CheckVehicleApp(tk.Tk):
     def approve_current_image(self) -> None:
         if not self.current_detail_result:
             return
-        for _plate, text_var, approved_var in self.detail_row_vars:
+        for _plate, text_var, approved_var, _original_value in self.detail_row_vars:
             if text_var.get().strip():
                 approved_var.set(True)
         self.save_detail_edits()
@@ -2144,6 +2639,7 @@ class CheckVehicleApp(tk.Tk):
                 text="",
                 readable=True,
                 reason="Thêm thủ công",
+                selected_plate_type=result.selected_plate_type,
             )
         )
         self._render_detail(result)
@@ -2366,6 +2862,7 @@ class CheckVehicleApp(tk.Tk):
         for path in self._filtered_sorted_images():
             self._upsert_image_row(path)
         self._update_stats()
+        self._update_reformat_action()
         if self.selected_image_path and self.selected_image_path in self.images:
             self._select_path(self.selected_image_path)
         elif self.images:
@@ -2395,15 +2892,15 @@ class CheckVehicleApp(tk.Tk):
 
     def _image_row_values(self, path: Path, result: ImageResult | None) -> tuple[str, str, str, str, str, str]:
         if result is None:
-            return ("Chờ quét", path.name, "", "", "", "")
+            return (path.name, "", "", "", "Chờ quét", "")
         plates = [plate.final_text for plate in result.plates if plate.final_text]
         first = result.plates[0] if result.plates else None
         plate_text = "; ".join(plates[:2])
-        status = "Đã duyệt" if self._all_final_plates_approved(result) else _display_status(result.status)
-        raw = first.raw_text if first else ""
-        confidence = f"{first.confidence:.0f}%" if first else ""
+        format_status = _display_plate_format_status(first.format_status) if first else _display_status(result.status)
+        raw = (first.raw_text or first.text) if first else ""
+        plate_type = _display_plate_type(first.selected_plate_type if first else result.selected_plate_type)
         review = "Cần review" if self._is_review_result(result) else "Không"
-        return (status, path.name, raw, plate_text, confidence, review)
+        return (path.name, plate_type, raw, plate_text, format_status, review)
 
     @staticmethod
     def _is_review_result(result: ImageResult | None) -> bool:
@@ -2438,7 +2935,7 @@ class CheckVehicleApp(tk.Tk):
             if result:
                 values.extend([result.status, result.reason])
                 for plate in result.plates:
-                    values.extend([plate.final_text, plate.raw_text, plate.source])
+                    values.extend([plate.final_text, plate.raw_text, plate.source, plate.format_reason, plate.cleaned_text])
             return " ".join(values).casefold()
 
         paths = []
@@ -2448,6 +2945,16 @@ class CheckVehicleApp(tk.Tk):
                 continue
             if result_filter == "Cần kiểm tra" and not self._is_review_result(result):
                 continue
+            if result_filter == "Đã định dạng" and not any(
+                plate.format_status is PlateFormatStatus.FORMATTED for plate in (result.plates if result else [])
+            ):
+                continue
+            if result_filter == "Biển đặc biệt" and not any(
+                plate.format_status is PlateFormatStatus.UNMATCHED
+                or plate.detected_format is DetectedPlateFormat.SPECIAL_OR_UNKNOWN
+                for plate in (result.plates if result else [])
+            ):
+                continue
             if result_filter == "Có lỗi" and (result is None or result.status != "ERROR"):
                 continue
             paths.append(path)
@@ -2455,14 +2962,14 @@ class CheckVehicleApp(tk.Tk):
         def sort_key(path: Path):
             result = self._result_for_path(path)
             first = result.plates[0] if result and result.plates else None
-            if self._result_sort_column == "status":
-                return _display_status(result.status) if result else "Chờ quét"
+            if self._result_sort_column == "format_status":
+                return _display_plate_format_status(first.format_status) if first else (_display_status(result.status) if result else "Chờ quét")
+            if self._result_sort_column == "plate_type":
+                return _display_plate_type(first.selected_plate_type if first else (result.selected_plate_type if result else PlateType.NONE))
             if self._result_sort_column == "raw":
                 return first.raw_text if first else ""
-            if self._result_sort_column == "plate":
+            if self._result_sort_column == "export":
                 return first.final_text if first else ""
-            if self._result_sort_column == "confidence":
-                return first.confidence if first else 0.0
             if self._result_sort_column == "review":
                 return int(self._is_review_result(result))
             if self._result_sort_column == "source":
@@ -2547,7 +3054,7 @@ class CheckVehicleApp(tk.Tk):
         try:
             image = Image.open(image_path)
             image = ImageOps.exif_transpose(image).convert("RGB")
-            image.thumbnail((500, 360), Image.Resampling.LANCZOS)
+            image.thumbnail((340, 250), Image.Resampling.LANCZOS)
             self.preview_photo = ImageTk.PhotoImage(image)
             self.preview_label.configure(image=self.preview_photo, text="")
         except Exception as exc:
@@ -2566,7 +3073,7 @@ class CheckVehicleApp(tk.Tk):
         try:
             image = Image.open(crop_path)
             image = ImageOps.exif_transpose(image).convert("RGB")
-            image.thumbnail((210, 120), Image.Resampling.LANCZOS)
+            image.thumbnail((140, 90), Image.Resampling.LANCZOS)
             self.crop_preview_photo = ImageTk.PhotoImage(image)
             label.configure(image=self.crop_preview_photo, text="")
         except Exception as exc:
@@ -2574,16 +3081,26 @@ class CheckVehicleApp(tk.Tk):
             label.configure(image="", text=f"Không mở được crop\n{exc}")
 
     def _render_plate_rows(self, result: ImageResult) -> None:
-        headers = ("OK", "Kết quả chọn", "OCR thô / gợi ý / tin cậy", "")
+        headers = ("OK", "Sửa thủ công", "Thông tin biển số", "")
         for column, header in enumerate(headers):
             ttk.Label(self.plates_frame, text=header, style="SurfaceMuted.TLabel").grid(row=0, column=column, sticky="w", padx=(0, 8), pady=(0, 4))
         for row_index, plate in enumerate(result.plates, start=1):
             approved_var = tk.BooleanVar(value=plate.review_approved)
             text_var = tk.StringVar(value=plate.final_text)
-            self.detail_row_vars.append((plate, text_var, approved_var))
+            self.detail_row_vars.append((plate, text_var, approved_var, plate.final_text))
             ttk.Checkbutton(self.plates_frame, variable=approved_var).grid(row=row_index, column=0, sticky="n", padx=(0, 8), pady=4)
             ttk.Entry(self.plates_frame, textvariable=text_var, width=24).grid(row=row_index, column=1, sticky="ew", pady=4)
-            detail = f"OCR thô: {plate.raw_text or plate.text or '—'}\nTin cậy: {plate.confidence:.0f}%"
+            detail = (
+                f"OCR nguyên bản: {plate.raw_text or plate.text or '—'}\n"
+                f"Chuỗi đã làm sạch: {plate.cleaned_text or '—'}\n"
+                f"Biển số đã định dạng: {plate.formatted_text or '—'}\n"
+                f"Kết quả xuất Excel: {plate.export_text or plate.final_text or '—'}\n"
+                f"Loại biển đã chọn: {_display_plate_type(plate.selected_plate_type)}\n"
+                f"Trạng thái: {_display_plate_format_status(plate.format_status)}\n"
+                f"Tin cậy: {plate.confidence:.0f}%"
+            )
+            if plate.format_reason:
+                detail += f"\nLý do: {plate.format_reason}"
             if plate.suggested_texts:
                 detail += f"\nGợi ý: {', '.join(plate.suggested_texts[:5])}"
             if plate.ambiguity_flags:
@@ -2613,20 +3130,15 @@ class CheckVehicleApp(tk.Tk):
         result = self.current_detail_result
         if not result or not self.detail_row_vars:
             return
-        for plate, text_var, approved_var in self.detail_row_vars:
-            value = text_var.get().strip().upper()
-            if value and value != plate.text:
-                plate.corrected_text = value
-            elif not value:
-                plate.corrected_text = ""
-            plate.review_approved = bool(approved_var.get() and value)
-            if value and not plate.text:
-                plate.text = value
-                plate.normalized_text = normalize_plate_text(value)
-                plate.readable = True
-            elif value:
-                plate.normalized_text = normalize_plate_text(value)
-            plate.cleaned_text, plate.suggested_texts, plate.ambiguity_flags, plate.needs_review = plate_text_metadata(value)
+        for plate, text_var, approved_var, original_value in self.detail_row_vars:
+            value = text_var.get()
+            has_value = bool(value.strip())
+            if value != original_value:
+                decision = plate.set_manual_correction(value if has_value else "", plate.selected_plate_type)
+                plate.normalized_text = decision.cleaned_text
+            plate.review_approved = bool(approved_var.get() and has_value)
+            if plate.source == "manual_review":
+                plate.readable = has_value
             if plate.review_approved:
                 plate.needs_review = False
 
@@ -2746,6 +3258,12 @@ class CheckVehicleApp(tk.Tk):
     def _apply_theme(self) -> None:
         self.colors = _theme_colors(self.dark_mode_var.get())
         self._configure_style()
+        for page in getattr(self.shell, "pages", {}).values():
+            scroll = getattr(page, "scroll", None)
+            if scroll is not None and hasattr(scroll, "refresh_theme"):
+                scroll.refresh_theme()
+            for nested_scroll in getattr(page, "scrolls", {}).values():
+                nested_scroll.refresh_theme()
         self._update_theme_toggle_text()
         for widget_name, option_map in (
             ("workflow_canvas", {"bg": self.colors["bg"]}),
@@ -2770,6 +3288,7 @@ class CheckVehicleApp(tk.Tk):
                 continue
             tree.tag_configure("ok", foreground=self.colors["success"])
             tree.tag_configure("review", foreground=self.colors["warning"])
+            tree.tag_configure("special", foreground=self.colors["warning"])
             tree.tag_configure("error", foreground=self.colors["danger"])
             tree.tag_configure("pending", foreground=self.colors["text_secondary"])
 
@@ -2795,6 +3314,8 @@ class CheckVehicleApp(tk.Tk):
             self.queue_capacity_var,
             self.performance_preset_var,
             self.paddle_scan_mode_var,
+            self.plate_type_var,
+            self.ai_review_policy_var,
             self.embed_excel_images_var,
             self.export_reviewed_only_var,
             self.output_dir_var,
@@ -2901,6 +3422,8 @@ class CheckVehicleApp(tk.Tk):
                 "queue_capacity": self._safe_int_var(self.queue_capacity_var, 32),
                 "performance_preset": self._performance_preset_key(),
                 "paddle_scan_mode": self.paddle_scan_mode_var.get().strip() or PADDLE_SCAN_MODE_DEFAULT,
+                "last_plate_type": self._selected_plate_type().value,
+                "ai_review_policy": self._selected_ai_review_policy().value,
                 "embed_excel_images": bool(self.embed_excel_images_var.get()),
                 "export_reviewed_only": bool(self.export_reviewed_only_var.get()),
                 "dark_mode": bool(self.dark_mode_var.get()),
@@ -3021,7 +3544,7 @@ class VisualReviewWindow(tk.Toplevel):
         self.on_change = on_change
         self.on_export = on_export
         self.photo = None
-        self.row_vars: list[tuple[PlateCandidate, tk.StringVar, tk.BooleanVar]] = []
+        self.row_vars: list[tuple[PlateCandidate, tk.StringVar, tk.BooleanVar, str]] = []
         self.colors = master.colors
         self.title("Duyệt kết quả")
         self.geometry("1180x720")
@@ -3093,7 +3616,7 @@ class VisualReviewWindow(tk.Toplevel):
         for row, plate in enumerate(result.plates, start=1):
             approved = tk.BooleanVar(value=plate.review_approved)
             text = tk.StringVar(value=plate.final_text)
-            self.row_vars.append((plate, text, approved))
+            self.row_vars.append((plate, text, approved, plate.final_text))
             ttk.Checkbutton(self.rows, variable=approved).grid(row=row, column=0, sticky="n", padx=(0, 8), pady=4)
             ttk.Entry(self.rows, textvariable=text, width=24).grid(row=row, column=1, sticky="ew", pady=4)
             ttk.Label(self.rows, text=f"{plate.confidence:.0f}% | {plate.source}", style="PanelSubtle.TLabel", wraplength=170).grid(
@@ -3105,26 +3628,22 @@ class VisualReviewWindow(tk.Toplevel):
         self.rows.columnconfigure(1, weight=1)
 
     def save_current(self) -> None:
-        for plate, text_var, approved_var in self.row_vars:
-            value = text_var.get().strip().upper()
-            if value and value != plate.text:
-                plate.corrected_text = value
-            elif not value:
-                plate.corrected_text = ""
-            plate.review_approved = bool(approved_var.get() and value)
-            if value:
-                if not plate.text:
-                    plate.text = value
-                    plate.readable = True
-                plate.normalized_text = normalize_plate_text(value)
-            plate.cleaned_text, plate.suggested_texts, plate.ambiguity_flags, plate.needs_review = plate_text_metadata(value)
+        for plate, text_var, approved_var, original_value in self.row_vars:
+            value = text_var.get()
+            has_value = bool(value.strip())
+            if value != original_value:
+                decision = plate.set_manual_correction(value if has_value else "", plate.selected_plate_type)
+                plate.normalized_text = decision.cleaned_text
+            plate.review_approved = bool(approved_var.get() and has_value)
+            if plate.source == "manual_review":
+                plate.readable = has_value
             if plate.review_approved:
                 plate.needs_review = False
         if self.on_change:
             self.on_change()
 
     def approve_all(self) -> None:
-        for _plate, text_var, approved_var in self.row_vars:
+        for _plate, text_var, approved_var, _original_value in self.row_vars:
             if text_var.get().strip():
                 approved_var.set(True)
         self.save_current()
@@ -3141,6 +3660,7 @@ class VisualReviewWindow(tk.Toplevel):
                 source="manual_review",
                 readable=True,
                 reason="Thêm thủ công",
+                selected_plate_type=result.selected_plate_type,
             )
         )
         self.render()
@@ -3283,9 +3803,27 @@ def _display_status(status: str) -> str:
     return mapping.get(status, status)
 
 
+def _display_plate_type(value: PlateType | str | None) -> str:
+    return PLATE_TYPE_LABELS[coerce_plate_type(value)]
+
+
+def _display_plate_format_status(value: PlateFormatStatus | str | None) -> str:
+    try:
+        status = PlateFormatStatus(str(value or PlateFormatStatus.DISABLED))
+    except ValueError:
+        status = PlateFormatStatus.DISABLED
+    return PLATE_FORMAT_STATUS_LABELS[status]
+
+
 def _row_tag(result: ImageResult | None, approved: bool) -> str:
     if result is None:
         return "pending"
+    if any(
+        plate.format_status is PlateFormatStatus.UNMATCHED
+        or plate.detected_format is DetectedPlateFormat.SPECIAL_OR_UNKNOWN
+        for plate in result.plates
+    ):
+        return "special"
     if approved or result.status == "OK":
         return "ok"
     if result.status in {"BLURRY", "UNREADABLE"}:

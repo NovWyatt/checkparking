@@ -121,6 +121,7 @@ def test_release_asset_tool() -> None:
         assert "manifest" in completed.stdout
         manifest = json.loads((output / "CheckVehicleOCR-9.9.9-manifest.json").read_text(encoding="utf-8"))
         assert manifest["download_url"].endswith("portable.zip") and manifest["assets"][0]["sha256"]
+        assert {"paddleocr", "paddlepaddle", "paddlex", "models"} <= set(manifest["ocr_runtime"])
         assert (output / "SHA256SUMS.txt").is_file()
 
 

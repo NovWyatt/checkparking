@@ -8,14 +8,18 @@ embed their exact build date, commit and GitHub repository.
 
 from __future__ import annotations
 
-VERSION = "1.7.2"
+VERSION = "1.8.0"
+DEFAULT_GITHUB_REPOSITORY = "NovWyatt/checkparking"
 
 try:
     from ._build_meta import BUILD_DATE, COMMIT_SHA, GITHUB_REPOSITORY
 except ImportError:
     BUILD_DATE = "development"
     COMMIT_SHA = "local"
-    GITHUB_REPOSITORY = ""
+    GITHUB_REPOSITORY = DEFAULT_GITHUB_REPOSITORY
+
+if not GITHUB_REPOSITORY:
+    GITHUB_REPOSITORY = DEFAULT_GITHUB_REPOSITORY
 
 __version__ = VERSION
 

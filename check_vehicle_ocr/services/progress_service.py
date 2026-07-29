@@ -33,17 +33,32 @@ class BatchProgress:
     cancelled: int = 0
     current_files: list[str] = field(default_factory=list)
     active_workers: dict[str, int] = field(default_factory=dict)
+    phase: str = "preparing"
+    local_completed: int = 0
+    local_active: int = 0
+    ai_queued: int = 0
+    ai_active: int = 0
+    ai_completed: int = 0
+    ai_failed: int = 0
+    local_only: int = 0
+    ai_improved: int = 0
+    ai_no_improvement: int = 0
+    finalizing: bool = False
+    local_elapsed_seconds: float = 0.0
+    ai_elapsed_seconds: float = 0.0
     started_at: float | None = None
     finished_at: float | None = None
 
     def preparing_model(self) -> None:
         self.status = BatchStatus.PREPARING_MODEL
         self.queued = self.total
+        self.phase = "preparing"
 
     def start(self) -> None:
         self.status = BatchStatus.RUNNING
         self.queued = max(0, self.total - self.completed - self.active)
         self.started_at = time.monotonic()
+        self.phase = "processing"
 
     def request_stop(self) -> None:
         if self.status in {BatchStatus.PREPARING_MODEL, BatchStatus.RUNNING, BatchStatus.PAUSED}:
@@ -80,7 +95,11 @@ class BatchProgress:
         self.active = max(0, self.active - 1)
         self.completed = min(self.total, self.completed + 1)
         self.current_files = [value for value in self.current_files if value != filename]
-        self.active_workers[pool] = max(0, self.active_workers.get(pool, 0) - 1)
+        remaining = max(0, self.active_workers.get(pool, 0) - 1)
+        if remaining:
+            self.active_workers[pool] = remaining
+        else:
+            self.active_workers.pop(pool, None)
         if outcome == "success":
             self.succeeded += 1
         elif outcome == "review":
@@ -90,10 +109,77 @@ class BatchProgress:
         else:
             self.failed += 1
 
+    # Hybrid batches deliberately track local OCR separately from final
+    # completion.  A local 18/18 must never render as 100% while an AI queue
+    # or the final merge is still outstanding.
+    def hybrid_local_started(self, filename: str) -> None:
+        self.phase = "local_ocr"
+        self.local_active += 1
+        if filename not in self.current_files:
+            self.current_files.append(filename)
+        self.active_workers["local_ocr"] = self.local_active
+
+    def hybrid_local_finished(self, filename: str) -> None:
+        self.local_active = max(0, self.local_active - 1)
+        self.local_completed = min(self.total, self.local_completed + 1)
+        self.current_files = [value for value in self.current_files if value != filename]
+        if self.local_active:
+            self.active_workers["local_ocr"] = self.local_active
+        else:
+            self.active_workers.pop("local_ocr", None)
+
+    def hybrid_queue_ai(self, amount: int = 1) -> None:
+        self.phase = "ai_waiting"
+        self.ai_queued += max(0, amount)
+
+    def hybrid_ai_started(self, filename: str) -> None:
+        self.phase = "ai_review"
+        self.ai_queued = max(0, self.ai_queued - 1)
+        self.ai_active += 1
+        self.active_workers["api"] = self.ai_active
+        if filename not in self.current_files:
+            self.current_files.append(filename)
+
+    def hybrid_ai_finished(self, filename: str, *, improved: bool, failed: bool = False) -> None:
+        self.ai_active = max(0, self.ai_active - 1)
+        self.ai_completed += 1
+        self.ai_failed += int(failed)
+        self.ai_improved += int(improved)
+        self.ai_no_improvement += int(not improved and not failed)
+        self.current_files = [value for value in self.current_files if value != filename]
+        if self.ai_active:
+            self.active_workers["api"] = self.ai_active
+        else:
+            self.active_workers.pop("api", None)
+
+    def hybrid_start_finalization(self) -> None:
+        self.phase = "finalizing"
+        self.finalizing = True
+
+    def hybrid_finish_result(self, outcome: str, *, used_ai: bool = False, ai_failed: bool = False) -> None:
+        self.completed = min(self.total, self.completed + 1)
+        self.queued = max(0, self.total - self.completed)
+        self.finalizing = False
+        if not used_ai:
+            self.local_only += 1
+        if outcome == "success":
+            self.succeeded += 1
+        elif outcome == "review":
+            self.needs_review += 1
+        elif outcome == "cancelled":
+            self.cancelled += 1
+        else:
+            self.failed += 1
+        if ai_failed:
+            self.failed += 1
+
     def finish(self, cancelled: bool = False, fatal: bool = False) -> None:
         self.finished_at = time.monotonic()
         self.active = 0
         self.current_files.clear()
+        self.active_workers.clear()
+        self.ai_queued = 0 if cancelled or fatal else self.ai_queued
+        self.finalizing = False
         if fatal:
             self.status = BatchStatus.FAILED
         elif cancelled:
@@ -128,4 +214,17 @@ class BatchProgress:
             "images_per_minute": rate,
             "eta_seconds": eta,
             "percent": self.percent,
+            "phase": self.phase,
+            "local_completed": self.local_completed,
+            "local_active": self.local_active,
+            "ai_queued": self.ai_queued,
+            "ai_active": self.ai_active,
+            "ai_completed": self.ai_completed,
+            "ai_failed": self.ai_failed,
+            "local_only": self.local_only,
+            "ai_improved": self.ai_improved,
+            "ai_no_improvement": self.ai_no_improvement,
+            "finalizing": self.finalizing,
+            "local_elapsed_seconds": self.local_elapsed_seconds,
+            "ai_elapsed_seconds": self.ai_elapsed_seconds,
         }

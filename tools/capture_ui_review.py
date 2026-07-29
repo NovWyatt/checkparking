@@ -22,6 +22,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from check_vehicle_ocr.app import CheckVehicleApp
 from check_vehicle_ocr.models import ImageResult, PlateCandidate
+from check_vehicle_ocr.plate_formatting import PlateType
 
 
 def capture(app: CheckVehicleApp, output: Path) -> None:
@@ -121,6 +122,9 @@ def main() -> int:
         capture(app, output_dir / "advanced-collapsed.png")
         scan_page._toggle_advanced()
         capture(app, output_dir / "advanced-expanded.png")
+        scan_page.scroll.canvas.yview_moveto(1)
+        capture(app, output_dir / "scan-scroll-end.png")
+        scan_page.scroll.canvas.yview_moveto(0)
         scan_page._toggle_advanced()
         app.dark_mode_var.set(True)
         app._on_theme_toggle()
@@ -133,6 +137,11 @@ def main() -> int:
                 "total": 12,
                 "completed": 4,
                 "percent": 33,
+                "phase": "ai_review",
+                "local_completed": 12,
+                "ai_queued": 2,
+                "ai_active": 1,
+                "ai_completed": 0,
                 "elapsed_seconds": 20,
                 "images_per_minute": 12.0,
                 "eta_seconds": 40.0,
@@ -150,28 +159,30 @@ def main() -> int:
             image_path = Path(temporary) / "xe_mau.jpg"
             Image.new("RGB", (640, 360), "white").save(image_path)
             app._add_paths([image_path])
+            app.plate_type_var.set("Xe máy")
+            plate = PlateCandidate(
+                bbox=(120, 120, 300, 70),
+                score=80,
+                source="paddle_region",
+                text="49MD-112.345",
+                raw_text="49MD112345",
+                cleaned_text="49MD112345",
+                normalized_text="49MD112345",
+                suggested_texts=["49MD112345"],
+                ambiguity_flags=["B/8"],
+                needs_review=True,
+                confidence=78,
+                readable=False,
+            )
+            plate.apply_plate_formatting(PlateType.MOTORCYCLE)
             result = ImageResult(
                 image_path=image_path,
                 status="UNREADABLE",
                 reason="Kết quả cần đối chiếu thủ công",
                 width=640,
                 height=360,
-                plates=[
-                    PlateCandidate(
-                        bbox=(120, 120, 300, 70),
-                        score=80,
-                        source="paddle_region",
-                        text="30A12B45",
-                        raw_text="30A12B45",
-                        cleaned_text="30A12B45",
-                        normalized_text="30A12B45",
-                        suggested_texts=["30A12845"],
-                        ambiguity_flags=["B/8"],
-                        needs_review=True,
-                        confidence=78,
-                        readable=False,
-                    )
-                ],
+                plates=[plate],
+                selected_plate_type=PlateType.MOTORCYCLE,
             )
             app.results = [result]
             app._refresh_table()
@@ -181,6 +192,12 @@ def main() -> int:
                     "total": 1,
                     "completed": 1,
                     "percent": 100,
+                    "phase": "finalizing",
+                    "local_completed": 1,
+                    "local_only": 1,
+                    "ai_queued": 0,
+                    "ai_active": 0,
+                    "ai_completed": 0,
                     "elapsed_seconds": 8,
                     "images_per_minute": 7.5,
                     "eta_seconds": 0.0,
@@ -207,6 +224,9 @@ def main() -> int:
         capture(app, output_dir / "settings-ai.png")
         app.show_settings_section("updates")
         capture(app, output_dir / "settings-updates.png")
+        settings_page = app.shell.pages["settings"]
+        settings_page.scrolls["updates"].canvas.yview_moveto(1)
+        capture(app, output_dir / "settings-updates-scroll-end.png")
     finally:
         app.destroy()
         temporary_appdata.cleanup()

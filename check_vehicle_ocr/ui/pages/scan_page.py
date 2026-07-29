@@ -4,6 +4,8 @@ from tkinter import ttk
 
 from .base import Page
 from ..components.forms import labelled_combo
+from ..components.scrollable import ScrollableFrame
+from ..components.tooltip import attach_tooltip
 
 
 class ScanPage(Page):
@@ -12,15 +14,20 @@ class ScanPage(Page):
 
     def __init__(self, parent, controller):
         super().__init__(parent, controller)
-        self.columnconfigure((0, 1), weight=1)
-        self.rowconfigure(2, weight=1)
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(0, weight=1)
+        self.scroll = ScrollableFrame(self, padding=(0, 0, 8, 0))
+        self.scroll.grid(row=0, column=0, sticky="nsew")
+        self.content = self.scroll.content
+        self.content.columnconfigure((0, 1), weight=1)
+        self.content.rowconfigure(2, weight=1)
         self._build_input_step(controller)
         self._build_recognition_step(controller)
         self._build_progress_step(controller)
-        self.bind("<Configure>", self._on_resize, add=True)
+        self.content.bind("<Configure>", self._on_resize, add=True)
 
     def _build_input_step(self, controller) -> None:
-        inputs = ttk.LabelFrame(self, text="Bước 1 — Chọn dữ liệu", style="Card.TLabelframe")
+        inputs = ttk.LabelFrame(self.content, text="Bước 1 — Chọn dữ liệu", style="Card.TLabelframe")
         self.inputs = inputs
         inputs.grid(row=0, column=0, sticky="nsew", padx=(0, 6), pady=(0, 12))
         inputs.columnconfigure((0, 1), weight=1)
@@ -31,10 +38,31 @@ class ScanPage(Page):
         ttk.Button(inputs, text="Chọn thư mục  Ctrl+Shift+O", command=controller.add_folder).grid(row=1, column=1, sticky="ew", padx=(4, 0))
         ttk.Checkbutton(inputs, text="Quét cả thư mục con", variable=controller.recursive_var).grid(row=2, column=0, sticky="w", pady=(10, 2))
         ttk.Label(inputs, textvariable=controller.input_summary_var, style="SurfaceMuted.TLabel").grid(row=2, column=1, sticky="e", pady=(10, 2))
-        ttk.Button(inputs, text="Xóa danh sách", command=controller.clear_all).grid(row=3, column=1, sticky="e", pady=(6, 0))
+        self.plate_type_combo = labelled_combo(
+            inputs,
+            3,
+            "Loại biển số",
+            controller.plate_type_var,
+            controller.plate_type_choices,
+            readonly=True,
+        )
+        attach_tooltip(
+            self.plate_type_combo,
+            "Ứng dụng chỉ thêm dấu gạch cho biển số khớp đúng mẫu; biển đặc biệt được giữ nguyên để kiểm tra.",
+        )
+        ttk.Label(inputs, textvariable=controller.plate_type_hint_var, style="SurfaceMuted.TLabel", wraplength=440).grid(
+            row=4, column=0, columnspan=2, sticky="w", pady=(1, 2)
+        )
+        ttk.Label(
+            inputs,
+            text="Ứng dụng sẽ tự thêm dấu gạch cho các biển số đúng mẫu. Biển đặc biệt sẽ được giữ nguyên để kiểm tra.",
+            style="SurfaceMuted.TLabel",
+            wraplength=440,
+        ).grid(row=5, column=0, columnspan=2, sticky="w", pady=(2, 2))
+        ttk.Button(inputs, text="Xóa danh sách", command=controller.clear_all).grid(row=6, column=1, sticky="e", pady=(6, 0))
 
     def _build_recognition_step(self, controller) -> None:
-        settings = ttk.LabelFrame(self, text="Bước 2 — Chọn cách nhận diện", style="Card.TLabelframe")
+        settings = ttk.LabelFrame(self.content, text="Bước 2 — Chọn cách nhận diện", style="Card.TLabelframe")
         self.settings = settings
         settings.grid(row=0, column=1, sticky="nsew", padx=(6, 0), pady=(0, 12))
         settings.columnconfigure(0, weight=1)
@@ -68,8 +96,24 @@ class ScanPage(Page):
         controller.open_ai_settings_button = ttk.Button(settings, text="Mở cài đặt AI", command=lambda: controller.show_settings_section("ai"))
         controller.open_ai_settings_button.grid(row=4, column=0, sticky="w", pady=(0, 10))
 
+        controller.ai_review_policy_combo = labelled_combo(
+            settings,
+            5,
+            "Mức dùng AI",
+            controller.ai_review_policy_var,
+            controller.ai_review_policy_choices,
+            readonly=True,
+        )
+        controller.ai_review_policy_hint_label = ttk.Label(
+            settings,
+            textvariable=controller.ai_review_policy_hint_var,
+            style="SurfaceMuted.TLabel",
+            wraplength=500,
+        )
+        controller.ai_review_policy_hint_label.grid(row=6, column=0, sticky="w", pady=(0, 8))
+
         performance = ttk.Frame(settings, style="Surface.TFrame")
-        performance.grid(row=5, column=0, sticky="ew", pady=(4, 0))
+        performance.grid(row=7, column=0, sticky="ew", pady=(4, 0))
         performance.columnconfigure(1, weight=1)
         self.scan_mode_combo = labelled_combo(performance, 0, "Chế độ quét", controller.paddle_scan_mode_var, controller.paddle_scan_choices, readonly=True)
         ttk.Label(performance, textvariable=controller.scan_mode_hint_var, style="SurfaceMuted.TLabel", wraplength=500).grid(
@@ -90,10 +134,10 @@ class ScanPage(Page):
             row=2, column=0, sticky="w"
         )
         self.advanced_toggle = ttk.Button(settings, text="Hiện cài đặt nâng cao", command=self._toggle_advanced)
-        self.advanced_toggle.grid(row=6, column=0, sticky="w", pady=(8, 0))
+        self.advanced_toggle.grid(row=8, column=0, sticky="w", pady=(8, 0))
 
     def _build_progress_step(self, controller) -> None:
-        progress = ttk.LabelFrame(self, text="Bước 3 — Bắt đầu", style="Card.TLabelframe")
+        progress = ttk.LabelFrame(self.content, text="Bước 3 — Bắt đầu", style="Card.TLabelframe")
         self.progress_panel = progress
         progress.grid(row=1, column=0, columnspan=2, sticky="new", pady=(0, 12))
         progress.columnconfigure(0, weight=1)
@@ -122,7 +166,7 @@ class ScanPage(Page):
             self.advanced.grid_remove()
             self.advanced_toggle.configure(text="Hiện cài đặt nâng cao")
         else:
-            self.advanced.grid(row=7, column=0, sticky="ew", pady=(6, 0))
+            self.advanced.grid(row=9, column=0, sticky="ew", pady=(6, 0))
             self.advanced_toggle.configure(text="Ẩn cài đặt nâng cao")
 
     def _on_resize(self, event) -> None:

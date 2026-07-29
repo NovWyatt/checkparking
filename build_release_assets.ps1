@@ -22,6 +22,10 @@ $Arguments = @(
     "--output-dir", (Join-Path $Root "release-assets"),
     "--repository", $Repository
 )
+$ReleaseNotesPath = Join-Path $Root ("docs\release-notes-v" + $Version + ".md")
+if (Test-Path -LiteralPath $ReleaseNotesPath) {
+    $Arguments += @("--release-notes", (Get-Content -LiteralPath $ReleaseNotesPath -Raw -Encoding UTF8))
+}
 if (-not $PortableOnly) { $Arguments += @("--installer", (Join-Path $Root "installer\Output\CheckVehicleOCR-$Version-windows-x64-setup.exe")) }
 & $Python @Arguments
 if ($LASTEXITCODE -ne 0) { throw "Không tạo được release assets." }

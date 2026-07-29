@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.metadata
 import json
 import shutil
 import zipfile
@@ -16,6 +17,13 @@ def sha256(path: Path) -> str:
         for chunk in iter(lambda: source.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def installed_version(distribution: str) -> str:
+    try:
+        return importlib.metadata.version(distribution)
+    except importlib.metadata.PackageNotFoundError:
+        return "unknown"
 
 
 def archive_directory(source_dir: Path, destination: Path) -> None:
@@ -67,6 +75,12 @@ def main() -> int:
         "release_notes": args.release_notes,
         "download_url": urls[preferred["name"]],
         "sha256": preferred["sha256"],
+        "ocr_runtime": {
+            "paddleocr": installed_version("paddleocr"),
+            "paddlepaddle": installed_version("paddlepaddle"),
+            "paddlex": installed_version("paddlex"),
+            "models": ["PP-OCRv5_mobile_det", "en_PP-OCRv5_mobile_rec"],
+        },
         "assets": [{**asset, "download_url": urls[asset["name"]]} for asset in assets],
     }
     manifest_path = output / f"CheckVehicleOCR-{args.version}-manifest.json"

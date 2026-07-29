@@ -8,9 +8,11 @@ the UI can describe what will happen before an operator approves it.
 from __future__ import annotations
 
 import hashlib
+import importlib
 import importlib.metadata
 import json
 import shutil
+import subprocess
 import tempfile
 import urllib.request
 import zipfile
@@ -89,7 +91,13 @@ def installed_version(distribution: str) -> str:
     try:
         return importlib.metadata.version(distribution)
     except importlib.metadata.PackageNotFoundError:
-        return "Chưa cài"
+        module_name = {"paddlepaddle": "paddle", "paddleocr": "paddleocr", "paddlex": "paddlex"}.get(distribution, distribution)
+        try:
+            module = importlib.import_module(module_name)
+            version = str(getattr(module, "__version__", "")).strip()
+            return version or "Chưa cài"
+        except Exception:
+            return "Chưa cài"
 
 
 def paddle_runtime_info() -> PaddleRuntimeInfo:
@@ -376,3 +384,27 @@ def stage_local_tesseract_package(package_path: Path, manifest: TesseractPackage
     if digest != manifest.sha256:
         raise ValueError("Gói Tesseract đã chọn không khớp SHA-256 trong manifest.")
     return stage_tesseract_archive(manifest, destination_root, opener=lambda *_args, **_kwargs: package.open("rb"))
+
+
+def validate_tesseract_component(
+    executable: str | Path,
+    *,
+    runner: Callable[..., object] = subprocess.run,
+) -> str:
+    """Validate a staged portable component before it becomes the active path."""
+
+    path = Path(executable)
+    if path.name.lower() != "tesseract.exe" or not path.is_file():
+        raise ValueError("Gói Tesseract không chứa tesseract.exe hợp lệ.")
+    tessdata = next((candidate for candidate in (path.parent / "tessdata", path.parent.parent / "tessdata") if (candidate / "eng.traineddata").is_file()), None)
+    if tessdata is None:
+        raise ValueError("Gói Tesseract thiếu tessdata/eng.traineddata.")
+    completed = runner([str(path), "--version"], capture_output=True, text=True, timeout=8, check=False)
+    if int(getattr(completed, "returncode", 1)) != 0:
+        raise ValueError("Không thể khởi động Tesseract đã tải.")
+    languages = runner([str(path), "--tessdata-dir", str(tessdata), "--list-langs"], capture_output=True, text=True, timeout=8, check=False)
+    output = f"{getattr(languages, 'stdout', '')}\n{getattr(languages, 'stderr', '')}".lower()
+    if int(getattr(languages, "returncode", 1)) != 0 or "eng" not in output:
+        raise ValueError("Tesseract đã tải không đọc được dữ liệu ngôn ngữ eng.")
+    version_line = (str(getattr(completed, "stdout", "")) or str(getattr(completed, "stderr", ""))).splitlines()
+    return version_line[0].strip() if version_line else "Tesseract đã sẵn sàng"

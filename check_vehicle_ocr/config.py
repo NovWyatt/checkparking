@@ -11,7 +11,7 @@ from typing import Any
 
 APP_DIR_NAME = "CheckVehicleOCR"
 SETTINGS_FILE = "settings.json"
-SETTINGS_VERSION = 15
+SETTINGS_VERSION = 17
 
 # These values were used only by early UI tests.  They must never behave as a
 # release source in a real operator profile.  Keep this exact, small list: a
@@ -126,8 +126,12 @@ def migrate_settings(data: dict[str, Any]) -> dict[str, Any]:
         else:
             recognition_mode = "local"
     migrated["recognition_mode"] = recognition_mode
+    ai_review_policy = str(migrated.get("ai_review_policy") or "needs_review").strip()
+    migrated["ai_review_policy"] = ai_review_policy if ai_review_policy in {"unreadable_only", "needs_review", "all_images"} else "needs_review"
     migrated.setdefault("tesseract_fallback_enabled", engine == "Local OCR")
     migrated.setdefault("export_reviewed_only", False)
+    last_plate_type = str(migrated.get("last_plate_type") or "NONE").strip().upper()
+    migrated["last_plate_type"] = last_plate_type if last_plate_type in {"MOTORCYCLE", "CAR", "NONE"} else "NONE"
     migrated.setdefault("performance_preset", _performance_preset_from_legacy(migrated))
     if migrated.get("paddle_scan_mode") == "Cân bằng":
         migrated["paddle_scan_mode"] = "Cân bằng — Khuyên dùng"

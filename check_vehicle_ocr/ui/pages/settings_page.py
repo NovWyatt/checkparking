@@ -4,6 +4,7 @@ from tkinter import ttk
 
 from .base import Page
 from ..components.forms import labelled_combo, labelled_entry, labelled_spin
+from ..components.scrollable import ScrollableFrame
 
 
 class SettingsPage(Page):
@@ -18,6 +19,8 @@ class SettingsPage(Page):
         self.notebook.grid(row=0, column=0, sticky="nsew")
         controller.settings_notebook = self.notebook
         self.tabs: dict[str, ttk.Frame] = {}
+        self.contents: dict[str, ttk.Frame] = {}
+        self.scrolls: dict[str, ScrollableFrame] = {}
         for key, title in (
             ("general", "Chung"),
             ("ai", "AI trực tuyến"),
@@ -25,15 +28,21 @@ class SettingsPage(Page):
             ("updates", "Cập nhật"),
             ("advanced", "Nâng cao"),
         ):
-            tab = ttk.Frame(self.notebook, style="App.TFrame", padding=12)
+            tab = ttk.Frame(self.notebook, style="App.TFrame")
             tab.columnconfigure(0, weight=1)
+            tab.rowconfigure(0, weight=1)
+            scroll = ScrollableFrame(tab, padding=12)
+            scroll.grid(row=0, column=0, sticky="nsew")
+            scroll.content.columnconfigure(0, weight=1)
             self.notebook.add(tab, text=title)
             self.tabs[key] = tab
-        self._build_general(self.tabs["general"], controller)
-        self._build_ai(self.tabs["ai"], controller)
-        self._build_notifications(self.tabs["notifications"], controller)
-        self._build_updates(self.tabs["updates"], controller)
-        self._build_advanced(self.tabs["advanced"], controller)
+            self.contents[key] = scroll.content
+            self.scrolls[key] = scroll
+        self._build_general(self.contents["general"], controller)
+        self._build_ai(self.contents["ai"], controller)
+        self._build_notifications(self.contents["notifications"], controller)
+        self._build_updates(self.contents["updates"], controller)
+        self._build_advanced(self.contents["advanced"], controller)
 
     @staticmethod
     def _card(parent, title: str):
@@ -106,7 +115,7 @@ class SettingsPage(Page):
         ttk.Label(card, textvariable=controller.telegram_status_var, style="SurfaceMuted.TLabel", wraplength=760).grid(row=8, column=0, columnspan=2, sticky="w")
 
     def _build_updates(self, parent, controller) -> None:
-        parent.columnconfigure((0, 1), weight=1)
+        parent.columnconfigure(0, weight=1)
         heading = ttk.Frame(parent, style="App.TFrame")
         heading.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 12))
         heading.columnconfigure(0, weight=1)
@@ -124,31 +133,24 @@ class SettingsPage(Page):
         # is never a second, disabled download button competing with it.
         controller.update_download_button = None
 
-        paddle_card = self._card(parent, "PaddleOCR")
-        ttk.Label(paddle_card, textvariable=controller.paddle_runtime_var, style="Surface.TLabel", wraplength=410).grid(row=0, column=0, sticky="w")
-        ttk.Label(paddle_card, textvariable=controller.paddle_update_status_var, style="SurfaceMuted.TLabel", wraplength=410).grid(row=1, column=0, sticky="w", pady=(4, 8))
-        controller.paddle_stage_button = ttk.Button(paddle_card, text="Kiểm tra", command=controller.check_paddle_updates, style="Primary.TButton")
+        paddle_card = self._card(parent, "Công cụ nhận diện PaddleOCR")
+        ttk.Label(paddle_card, textvariable=controller.paddle_runtime_var, style="Surface.TLabel", wraplength=760).grid(row=0, column=0, sticky="w")
+        ttk.Label(paddle_card, text="Cập nhật cùng bản phát hành ứng dụng đã kiểm thử; không thay môi trường đang chạy.", style="SurfaceMuted.TLabel", wraplength=760).grid(row=1, column=0, sticky="w", pady=(4, 8))
+        controller.paddle_stage_button = ttk.Button(paddle_card, text="Cập nhật", command=controller.check_for_updates, style="Primary.TButton")
         controller.paddle_stage_button.grid(row=2, column=0, sticky="w")
         ttk.Button(paddle_card, text="Chi tiết", command=controller.show_paddle_update_details).grid(row=2, column=1, sticky="e")
 
-        model_card = self._card(parent, "Model OCR")
-        ttk.Label(model_card, textvariable=controller.model_inventory_var, style="Surface.TLabel", wraplength=410).grid(row=0, column=0, sticky="w")
-        ttk.Label(model_card, textvariable=controller.model_update_status_var, style="SurfaceMuted.TLabel", wraplength=410).grid(row=1, column=0, sticky="w", pady=(4, 8))
-        controller.model_manage_button = ttk.Button(model_card, text="Quản lý model", command=controller.manage_models, style="Primary.TButton")
-        controller.model_manage_button.grid(row=2, column=0, sticky="w")
-        ttk.Button(model_card, text="Chi tiết", command=controller.manage_models).grid(row=2, column=1, sticky="e")
-
         tesseract_card = self._card(parent, "Tesseract dự phòng")
-        ttk.Label(tesseract_card, textvariable=controller.tesseract_status_var, style="Surface.TLabel", wraplength=410).grid(row=0, column=0, sticky="w")
+        ttk.Label(tesseract_card, textvariable=controller.tesseract_status_var, style="Surface.TLabel", wraplength=760).grid(row=0, column=0, sticky="w")
         ttk.Label(tesseract_card, text="Không bắt buộc khi PaddleOCR hoạt động.", style="SurfaceMuted.TLabel").grid(row=1, column=0, sticky="w", pady=(4, 8))
-        controller.tesseract_manage_button = ttk.Button(tesseract_card, text="Cài hoặc chọn", command=controller.manage_tesseract, style="Primary.TButton")
+        controller.tesseract_manage_button = ttk.Button(tesseract_card, text="Cài đặt", command=controller.install_tesseract_component, style="Primary.TButton")
         controller.tesseract_manage_button.grid(row=2, column=0, sticky="w")
         ttk.Button(tesseract_card, text="Chi tiết", command=controller.manage_tesseract).grid(row=2, column=1, sticky="e")
 
         details_toggle = ttk.Button(parent, text="Hiển thị chi tiết kỹ thuật")
-        details_toggle.grid(row=3, column=0, columnspan=2, sticky="w", pady=(4, 0))
+        details_toggle.grid(row=4, column=0, sticky="w", pady=(4, 0))
         details = ttk.LabelFrame(parent, text="Chi tiết kỹ thuật", style="Card.TLabelframe")
-        details.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+        details.grid(row=5, column=0, sticky="ew", pady=(6, 0))
         details.columnconfigure(1, weight=1)
         labelled_combo(details, 0, "Nguồn ứng dụng", controller.update_source_mode_var, ("Tắt cập nhật", "GitHub Releases", "Manifest tùy chỉnh"), readonly=True)
         labelled_entry(details, 1, "Repository GitHub", controller.github_repository_var)
@@ -158,8 +160,9 @@ class SettingsPage(Page):
         labelled_entry(details, 4, "PaddleOCR thử nghiệm", controller.paddle_candidate_version_var)
         labelled_entry(details, 5, "Nguồn model", controller.model_manifest_url_var)
         labelled_entry(details, 6, "Nguồn gói Tesseract", controller.tesseract_manifest_url_var)
+        ttk.Label(details, textvariable=controller.model_inventory_var, style="SurfaceMuted.TLabel", wraplength=760).grid(row=7, column=0, columnspan=2, sticky="w", pady=(8, 0))
         actions = ttk.Frame(details, style="Surface.TFrame")
-        actions.grid(row=7, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        actions.grid(row=8, column=0, columnspan=2, sticky="w", pady=(8, 0))
         controller.paddle_activate_button = ttk.Button(actions, text="Dùng bản đã thử ở lần mở sau", command=controller.activate_paddle_runtime, state="disabled")
         controller.paddle_activate_button.grid(row=0, column=0, sticky="w", padx=(0, 6))
         controller.paddle_rollback_button = ttk.Button(actions, text="Quay lại bản PaddleOCR trước", command=controller.rollback_paddle_runtime)
@@ -168,7 +171,7 @@ class SettingsPage(Page):
         controller.model_activate_button.grid(row=1, column=0, sticky="w", padx=(0, 6), pady=(6, 0))
         controller.model_rollback_button = ttk.Button(actions, text="Quay lại model trước", command=controller.rollback_staged_model)
         controller.model_rollback_button.grid(row=1, column=1, sticky="w", pady=(6, 0))
-        ttk.Label(details, textvariable=controller.update_notes_var, style="SurfaceMuted.TLabel", wraplength=760).grid(row=8, column=0, columnspan=2, sticky="w", pady=(8, 0))
+        ttk.Label(details, textvariable=controller.update_notes_var, style="SurfaceMuted.TLabel", wraplength=760).grid(row=9, column=0, columnspan=2, sticky="w", pady=(8, 0))
 
         def toggle_details() -> None:
             if details.winfo_ismapped():
@@ -183,10 +186,9 @@ class SettingsPage(Page):
         controller.update_technical_details_visible = details.winfo_ismapped
         details.grid_remove()
 
-        app_card.grid_configure(row=1, column=0, sticky="nsew", padx=(0, 6))
-        paddle_card.grid_configure(row=1, column=1, sticky="nsew", padx=(6, 0))
-        model_card.grid_configure(row=2, column=0, sticky="nsew", padx=(0, 6))
-        tesseract_card.grid_configure(row=2, column=1, sticky="nsew", padx=(6, 0))
+        app_card.grid_configure(row=1, column=0, sticky="ew")
+        paddle_card.grid_configure(row=2, column=0, sticky="ew")
+        tesseract_card.grid_configure(row=3, column=0, sticky="ew")
 
     def _build_advanced(self, parent, controller) -> None:
         workers = self._card(parent, "Hiệu năng và xử lý kỹ thuật")

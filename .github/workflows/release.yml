@@ -38,12 +38,19 @@ jobs:
           .\.venv\Scripts\python.exe -B -m compileall -q check_vehicle_ocr tests tools main.py
           .\.venv\Scripts\python.exe -B tests\release_system_test.py
           .\.venv\Scripts\python.exe -B tests\update_actions_control_test.py
+          .\.venv\Scripts\python.exe -B tests\plate_formatting_test.py
+          .\.venv\Scripts\python.exe -B tests\hybrid_progress_policy_test.py
+          .\.venv\Scripts\python.exe -B tests\hybrid_pipeline_test.py
+          .\.venv\Scripts\python.exe -B tests\release_v180_test.py
+          .\.venv\Scripts\python.exe -B tests\scrollable_frame_test.py
       - name: Build portable executable and installer
         shell: pwsh
         run: |
           .\build_exe.ps1 -SkipInstall -SkipModelWarmup
           .\build_installer.ps1 -SkipExeBuild
           .\build_release_assets.ps1 -SkipBuild
+          $version = .\.venv\Scripts\python.exe -c "from check_vehicle_ocr.version import VERSION; print(VERSION)"
+          .\.venv\Scripts\python.exe -B tools\packaged_ui_assert.py --version $version
       - name: Verify release asset checksums
         shell: pwsh
         run: |
@@ -55,7 +62,7 @@ jobs:
       - name: Create GitHub Release and upload verified assets
         uses: softprops/action-gh-release@v2
         with:
-          generate_release_notes: true
+          body_path: docs/release-notes-v1.8.0.md
           files: |
             release-assets/CheckVehicleOCR-*-windows-x64-setup.exe
             release-assets/CheckVehicleOCR-*-windows-x64-portable.zip

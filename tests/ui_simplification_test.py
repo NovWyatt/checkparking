@@ -14,6 +14,8 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from check_vehicle_ocr.app import CheckVehicleApp, PERFORMANCE_PRESET_LABELS
 from check_vehicle_ocr.config import migrate_settings
+from check_vehicle_ocr.models import ImageResult, PlateCandidate
+from check_vehicle_ocr.plate_formatting import PlateFormatStatus, PlateType
 from check_vehicle_ocr.runtime_manager import RuntimeStagingReport
 from check_vehicle_ocr.update_center import PaddleRelease
 
@@ -59,6 +61,10 @@ def main() -> int:
             texts = "\n".join(_widget_texts(scan))
             assert "Engine" not in texts and "AI Providers" not in texts and "Worker ảnh" not in texts
             assert "Cục bộ — Khuyên dùng" in texts and "cách nhận diện" in texts
+            assert "Loại biển số" in texts
+            assert app.plate_type_var.get() == "Không tự định dạng"
+            app.plate_type_var.set("Xe máy")
+            assert "59X1-12345" in app.plate_type_hint_var.get()
 
             app.performance_preset_var.set(PERFORMANCE_PRESET_LABELS["LOW_MEMORY"])
             assert app.worker_mode_var.get() == "MANUAL"
@@ -75,15 +81,40 @@ def main() -> int:
             app.recognition_mode_var.set("local")
             assert app.engine_var.get() == "PaddleOCR Local" and not app.ai_config_warning_var.get()
             app.recognition_mode_var.set("local_ai_review")
+            app.update_idletasks()
             assert app.engine_var.get() == "PaddleOCR + AI Review"
+            assert app.ai_review_policy_combo is not None and app.ai_review_policy_combo.winfo_ismapped()
+            assert app.ai_review_policy_var.get() == "Khi kết quả cần kiểm tra — Khuyên dùng"
             app.recognition_mode_var.set("local")
+            app.update_idletasks()
+            assert not app.ai_review_policy_combo.winfo_ismapped()
 
             app.show_page("results")
             assert "results" in app.shell.pages and hasattr(app, "image_tree") and hasattr(app, "plates_frame")
+            standard = PlateCandidate(bbox=(0, 0, 1, 1), score=90, text="59X112345", raw_text="59X112345", readable=True)
+            standard.apply_plate_formatting(PlateType.MOTORCYCLE)
+            special = PlateCandidate(bbox=(0, 0, 1, 1), score=80, text="49MD112345", raw_text="49MD112345", readable=True)
+            special.apply_plate_formatting(PlateType.MOTORCYCLE)
+            image_path = Path(appdata) / "batch.jpg"
+            app.images = [image_path]
+            app.results = [ImageResult(image_path=image_path, status="OK", reason="", plates=[standard, special], selected_plate_type=PlateType.MOTORCYCLE)]
+            app.result_filter_var.set("Biển đặc biệt")
+            assert app._filtered_sorted_images() == [image_path]
+            app.result_filter_var.set("Đã định dạng")
+            assert app._filtered_sorted_images() == [image_path]
+            app.result_filter_var.set("Tất cả")
+            app.plate_type_var.set("Ô tô")
+            assert "khác batch" in app.reformat_hint_var.get()
+            app.reformat_current_results()
+            assert standard.format_status is PlateFormatStatus.UNMATCHED
+            assert special.format_status is PlateFormatStatus.UNMATCHED
             app.show_settings_section("ai")
             assert app.ui_state.current_page == "settings" and app.settings_notebook is not None
             app.show_settings_section("updates")
             assert app.update_check_button is not None and app.paddle_stage_button is not None
+            update_texts = "\n".join(_widget_texts(app.shell.pages["settings"]))
+            assert "Công cụ nhận diện PaddleOCR" in update_texts and "Tesseract dự phòng" in update_texts
+            assert "Model OCR" not in update_texts
             assert app.tesseract_fallback_enabled_var.get() is False
             with patch("check_vehicle_ocr.app.fetch_paddle_release", return_value=PaddleRelease("9.9.9", "mock://pypi", "mock://notes")):
                 app.check_paddle_updates()

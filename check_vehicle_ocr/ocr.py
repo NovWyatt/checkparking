@@ -244,6 +244,10 @@ class TesseractOcrEngine:
             self.reason = "Không tìm thấy tesseract.exe."
             return
 
+        for tessdata in (self.tesseract_path.parent / "tessdata", self.tesseract_path.parent.parent / "tessdata"):
+            if (tessdata / "eng.traineddata").is_file():
+                os.environ["TESSDATA_PREFIX"] = str(tessdata)
+                break
         pytesseract.pytesseract.tesseract_cmd = str(self.tesseract_path)
 
     @property

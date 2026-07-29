@@ -35,6 +35,9 @@ datas = collect_data_files("paddlex") + collect_data_files("paddleocr")
 model_manifest = project_root / "models" / "manifest.json"
 if model_manifest.is_file():
     datas.append((str(model_manifest), "models"))
+icons_dir = project_root / "assets" / "icons"
+if icons_dir.is_dir():
+    datas.append((str(icons_dir), "assets/icons"))
 for model_name in paddleocr_model_names:
     model_dir = Path.home() / ".paddlex" / "official_models" / model_name
     if model_dir.exists():
@@ -56,6 +59,7 @@ for detector_model_path in (
 for package_name in (
     "paddlex",
     "paddleocr",
+    "paddlepaddle",
     "open-image-models",
     "onnxruntime",
     "imagesize",
@@ -116,6 +120,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon=str(project_root / "assets" / "icons" / "app-icon.ico"),
 )
 
 coll = COLLECT(

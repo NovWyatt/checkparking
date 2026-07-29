@@ -157,6 +157,7 @@ def configure_styles(root: tk.Misc, palette: dict[str, str], *, initialize_theme
     style.map("Treeview", background=[("selected", palette["surface_selected"])], foreground=[("selected", palette["text_primary"])])
     style.configure("Treeview.Heading", background=palette["surface_hover"], foreground=palette["text_primary"], bordercolor=palette["border"], font=("Segoe UI", 9, "bold"))
     style.configure("TProgressbar", background=palette["accent"], troughcolor=palette["border"], bordercolor=palette["border"])
+    style.configure("Success.Horizontal.TProgressbar", background=palette["success"], troughcolor=palette["border"], bordercolor=palette["success"])
     style.configure("TNotebook", background=palette["background"], bordercolor=palette["border"])
     style.configure("TNotebook.Tab", background=palette["surface"], foreground=palette["text_secondary"], padding=(12, 7))
     style.map("TNotebook.Tab", background=[("selected", palette["surface_selected"]), ("active", palette["surface_hover"])], foreground=[("selected", palette["text_primary"])])

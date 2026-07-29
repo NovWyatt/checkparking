@@ -48,7 +48,8 @@ jobs:
             'tests\provider_api_mode_test.py', 'tests\provider_integration_test.py',
             'tests\telegram_integration_test.py', 'tests\tesseract_optional_test.py',
             'tests\updater_local_e2e_test.py', 'tests\updater_ui_state_test.py',
-            'tests\release_system_test.py'
+            'tests\release_system_test.py', 'tests\plate_formatting_test.py',
+            'tests\hybrid_progress_policy_test.py', 'tests\hybrid_pipeline_test.py', 'tests\release_v180_test.py'
           )
           foreach ($test in $tests) {
             Write-Host "RUN $test"
@@ -62,7 +63,7 @@ jobs:
         run: |
           $tests = @(
             'tests\theme_contrast_test.py', 'tests\ui_simplification_test.py',
-            'tests\ui_smoke_test.py', 'tests\update_actions_control_test.py',
+            'tests\ui_smoke_test.py', 'tests\scrollable_frame_test.py', 'tests\update_actions_control_test.py',
             'tests\update_center_test.py'
           )
           foreach ($test in $tests) {
