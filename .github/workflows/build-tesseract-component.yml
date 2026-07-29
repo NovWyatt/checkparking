@@ -70,7 +70,14 @@ jobs:
       - name: Package and hash component
         shell: pwsh
         run: |
-          python tools\build_tesseract_component.py --install-dir .runtime\tesseract-install --runtime-dll-dir C:\msys64\ucrt64\bin --source-dir .runtime\tesseract-source --tessdata-dir .runtime\tessdata-fast --output-dir component-assets --version $env:TESSERACT_TAG --source-tag $env:TESSERACT_TAG --source-commit $env:TESSERACT_COMMIT --tessdata-commit $env:TESSDATA_COMMIT --repository NovWyatt/checkparking --tag "${{ github.ref_name }}"
+          $output = & python tools\build_tesseract_component.py --install-dir .runtime\tesseract-install --runtime-dll-dir C:\msys64\ucrt64\bin --source-dir .runtime\tesseract-source --tessdata-dir .runtime\tessdata-fast --output-dir component-assets --version $env:TESSERACT_TAG --source-tag $env:TESSERACT_TAG --source-commit $env:TESSERACT_COMMIT --tessdata-commit $env:TESSDATA_COMMIT --repository NovWyatt/checkparking --tag "${{ github.ref_name }}" 2>&1
+          $exitCode = $LASTEXITCODE
+          $output | ForEach-Object { Write-Host $_ }
+          if ($exitCode -ne 0) {
+            $detail = (($output | Out-String) -replace '[\r\n]+', ' ').Trim()
+            Write-Host "::error title=Tesseract component packaging::$detail"
+            exit $exitCode
+          }
       - name: Validate component hash and OCR smoke
         shell: pwsh
         run: |
