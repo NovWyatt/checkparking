@@ -104,4 +104,5 @@ jobs:
             release-assets/model-manifest.json
             release-assets/runtime-versions.json
             release-assets/tesseract-build-lock.json
+            release-assets/update-manifest.json
             release-assets/SHA256SUMS.txt
