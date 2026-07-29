@@ -1,14 +1,22 @@
-# Phát hành Tesseract dự phòng
+# Phát hành component Tesseract dự phòng
 
-Tesseract là thành phần tùy chọn. Check Vehicle OCR không tải installer Windows ngẫu nhiên từ Internet.
+Component Windows x64 v1.9.0 là Tesseract **5.5.3**, build Release từ source
+tag chính thức `5.5.3` tại commit
+`db0ec62f81b0737fbbe184d8fea40af5738f8eef`. Workflow
+`.github/workflows/build-tesseract-component.yml` dùng MSYS2 UCRT64, CMake,
+Ninja và dependency đã liệt kê/pin trong `tools/tesseract-build-lock.json`.
+Không tải installer Windows bên thứ ba.
 
-Chỉ tạo asset component khi người phát hành đã xác minh nguồn, license, nội dung ZIP và SHA-256.
+`tessdata_fast` được pin tag `4.1.0`, commit
+`65727574dfcd264acbb0c3e07860e4e9e9b22185`; package chỉ chứa `eng` và `osd`.
+Archive phải có `tesseract/bin/tesseract.exe`, DLL runtime cần thiết,
+`tesseract/tessdata`, license/notices, `component-manifest.json`, `SBOM.json`
+và `SHA256SUMS.txt`.
 
-ZIP phải có tối thiểu:
-
-- `tesseract.exe` và DLL cần thiết;
-- `tessdata/eng.traineddata`;
-- `LICENSE` hoặc `NOTICE` của bản build;
-- `component-manifest.json` chứa phiên bản, Windows x64, URL asset, SHA-256, loại `zip`, license và nguồn.
-
-Trước khi upload vào GitHub Release của `NovWyatt/checkparking`, chạy `tesseract --version`, `--list-langs` với thư mục `tessdata`, OCR smoke trên fixture nội bộ, rồi ghi checksum thật. Khi chưa có asset thỏa các điều kiện này, để trống nguồn manifest trong ứng dụng; người dùng vẫn có thể chọn bản Tesseract đã cài mà không ảnh hưởng PaddleOCR.
+Trước khi upload, workflow và kiểm tra local bắt buộc xác minh tag/commit,
+`tesseract --version`, `--list-langs`, OCR fixture, archive SHA-256 và hash/kích
+thước từng file runtime. Manifest ngoài archive
+`tesseract-component-manifest.json` là nguồn archive SHA-256: manifest bên
+trong không tự hash được archive đang chứa nó. Ứng dụng chỉ chấp nhận HTTPS
+asset của GitHub Release `NovWyatt/checkparking`, giới hạn dung lượng/số file,
+chống Zip Slip và staging nguyên tử trước khi kích hoạt/rollback.

@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "synthetic_only": true,
+  "profiles": {
+    "pp-ocrv5-mobile": {
+      "status": "passed",
+      "detection_model": "PP-OCRv5_mobile_det",
+      "recognition_model": "en_PP-OCRv5_mobile_rec",
+      "cold_init_seconds": 2.2361,
+      "first_inference_seconds": 0.9456,
+      "warm_batches": {
+        "10": {
+          "seconds": 8.0606,
+          "images_per_minute": 74.44,
+          "result_count": 10
+        },
+        "30": {
+          "seconds": 23.4271,
+          "images_per_minute": 76.83,
+          "result_count": 30
+        }
+      },
+      "working_set_delta_mb": 239.71,
+      "package_model_bytes": 12960659,
+      "first_result_count": 1
+    },
+    "pp-ocrv6-tiny": {
+      "status": "passed",
+      "detection_model": "PP-OCRv6_tiny_det",
+      "recognition_model": "PP-OCRv6_tiny_rec",
+      "cold_init_seconds": 0.6888,
+      "first_inference_seconds": 0.5167,
+      "warm_batches": {
+        "10": {
+          "seconds": 4.5135,
+          "images_per_minute": 132.94,
+          "result_count": 10
+        },
+        "30": {
+          "seconds": 13.3335,
+          "images_per_minute": 135.0,
+          "result_count": 30
+        }
+      },
+      "working_set_delta_mb": 44.43,
+      "package_model_bytes": 6585937,
+      "first_result_count": 1
+    }
+  },
+  "tesseract_5_5_3": {
+    "status": "passed",
+    "first_inference_seconds": 0.1896,
+    "first_text": "",
+    "warm_batches": {
+      "10": {
+        "seconds": 1.787,
+        "images_per_minute": 335.76,
+        "nonempty": 0
+      }
+    }
+  },
+  "paddle_tesseract_fallback": {
+    "status": "policy-only",
+    "note": "Fallback runs only for an unreadable, low-confidence, ambiguous or unmatched PaddleOCR candidate; this synthetic batch did not force fallback."
+  }
+}

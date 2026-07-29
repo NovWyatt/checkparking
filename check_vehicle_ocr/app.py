@@ -26,9 +26,10 @@ from .gemini_vision import DEFAULT_GEMINI_MODEL, GEMINI_MODEL_CHOICES, GeminiVis
 from .gpt_vision import DEFAULT_GPT_MODEL, GPT_MODEL_CHOICES, GptVisionEngine
 from .image_io import collect_images, load_image
 from .hybrid_review import AiReviewPolicy, coerce_ai_review_policy, result_has_readable_plate, should_send_to_ai
+from .candidate_scoring import apply_fallback_selection
 from .models import BatchSession, ImageResult, PlateCandidate
 from .ocr import TesseractOcrEngine, find_tesseract
-from .paddle_ocr_engine import PaddleOcrEngine
+from .paddle_ocr_engine import PaddleOcrEngine, current_model_selection
 from .plate_recognizer import DEFAULT_PLATE_RECOGNIZER_REGION, PlateRecognizerEngine
 from .plate_formatting import DetectedPlateFormat, PlateFormatStatus, PlateType, coerce_plate_type
 from .processor import process_image
@@ -43,8 +44,12 @@ from .runtime_manager import PaddleRuntimeManager, RuntimeStagingReport
 from .model_registry import ModelRuntimeManager, ModelValidationReport
 from .update_center import (
     PYPI_PADDLEOCR_URL,
+    DEFAULT_MODEL_MANIFEST_URL,
+    DEFAULT_TESSERACT_MANIFEST_URL,
     PaddleRelease,
     TesseractPackageManifest,
+    activate_tesseract_stage,
+    discard_tesseract_stage,
     fetch_model_manifest,
     fetch_paddle_release,
     fetch_tesseract_manifest,
@@ -365,6 +370,10 @@ class CheckVehicleApp(tk.Tk):
 
         self.tesseract_var = tk.StringVar(value=str(self.settings.get("tesseract_path") or find_tesseract() or ""))
         self.tesseract_previous_path_var = tk.StringVar(value=str(self.settings.get("tesseract_previous_path") or ""))
+        self.tessdata_path_var = tk.StringVar(value=str(self.settings.get("tessdata_path") or ""))
+        self.tesseract_component_version_var = tk.StringVar(value=str(self.settings.get("tesseract_component_version") or ""))
+        self.tesseract_component_sha256_var = tk.StringVar(value=str(self.settings.get("tesseract_component_sha256") or ""))
+        self.tesseract_installed_at_var = tk.StringVar(value=str(self.settings.get("tesseract_installed_at") or ""))
         self.tesseract_fallback_enabled_var = tk.BooleanVar(value=bool(self.settings.get("tesseract_fallback_enabled", False)))
         self.recursive_var = tk.BooleanVar(value=bool(self.settings.get("recursive", True)))
         self.blur_threshold_var = tk.DoubleVar(value=float(self.settings.get("blur_threshold", 80.0)))
@@ -447,8 +456,8 @@ class CheckVehicleApp(tk.Tk):
         self.update_manifest_url_var = tk.StringVar(value=str(update_settings.get("manifest_url") or ""))
         self.paddle_release_source_var = tk.StringVar(value=str(update_settings.get("paddle_release_source") or PYPI_PADDLEOCR_URL))
         self.paddle_candidate_version_var = tk.StringVar(value=str(update_settings.get("paddle_candidate_version") or ""))
-        self.model_manifest_url_var = tk.StringVar(value=str(update_settings.get("model_manifest_url") or ""))
-        self.tesseract_manifest_url_var = tk.StringVar(value=str(update_settings.get("tesseract_manifest_url") or ""))
+        self.model_manifest_url_var = tk.StringVar(value=str(update_settings.get("model_manifest_url") or DEFAULT_MODEL_MANIFEST_URL))
+        self.tesseract_manifest_url_var = tk.StringVar(value=str(update_settings.get("tesseract_manifest_url") or DEFAULT_TESSERACT_MANIFEST_URL))
 
         self.status_var = tk.StringVar(value="Sẵn sàng")
         self.key_status_var = tk.StringVar()
@@ -838,18 +847,31 @@ class CheckVehicleApp(tk.Tk):
             return
         self._set_tesseract_executable(executable, "Đã chọn Tesseract portable.")
 
-    def _set_tesseract_executable(self, executable: Path, message: str) -> None:
+    def _set_tesseract_executable(self, executable: Path, message: str, manifest: TesseractPackageManifest | None = None) -> None:
         current = self.tesseract_var.get().strip()
         replacement = str(executable)
         if current and current != replacement and Path(current).exists():
             self.tesseract_previous_path_var.set(current)
         self.tesseract_var.set(replacement)
+        tessdata = next((candidate for candidate in (executable.parent / "tessdata", executable.parent.parent / "tessdata") if (candidate / "eng.traineddata").is_file()), None)
+        self.tessdata_path_var.set(str(tessdata) if tessdata else "")
+        if manifest is not None:
+            self.tesseract_component_version_var.set(manifest.version)
+            self.tesseract_component_sha256_var.set(manifest.sha256)
+            self.tesseract_installed_at_var.set(datetime.now().astimezone().replace(microsecond=0).isoformat())
         self.tesseract_status_var.set(f"{message} Không bắt buộc khi PaddleOCR hoạt động.")
         self._schedule_settings_save()
 
     @staticmethod
     def _tesseract_component_root() -> Path:
-        return settings_path().parent / "components" / "tesseract"
+        local_app_data = os.environ.get("LOCALAPPDATA")
+        base = Path(local_app_data) if local_app_data else settings_path().parent.parent
+        return base / "CheckVehicleOCR" / "components" / "tesseract"
+
+    @staticmethod
+    def _tesseract_smoke_fixture() -> Path:
+        base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[1]))
+        return base / "assets" / "tesseract" / "smoke-plate.png"
 
     def install_tesseract_component(self) -> None:
         """Use the one-click path only when the project has a verified manifest."""
@@ -928,11 +950,14 @@ class CheckVehicleApp(tk.Tk):
             try:
                 manifest = fetch_tesseract_manifest(manifest_url)
                 executable = stage_local_tesseract_package(Path(selected), manifest, self._tesseract_component_root())
-                validate_tesseract_component(executable)
+                validate_tesseract_component(executable, expected_version=manifest.version, smoke_image=self._tesseract_smoke_fixture())
+                executable = activate_tesseract_stage(executable, manifest, self._tesseract_component_root())
             except Exception:
+                if "executable" in locals():
+                    discard_tesseract_stage(executable, self._tesseract_component_root())
                 self.event_queue.put(("tesseract_status", "Không thể xác minh gói Tesseract đã chọn. Runtime hiện tại không thay đổi."))
             else:
-                self.event_queue.put(("tesseract_staged", executable))
+                self.event_queue.put(("tesseract_staged", executable, manifest))
 
         threading.Thread(target=worker, name="check_vehicle_tesseract_local_stage", daemon=True).start()
 
@@ -947,11 +972,14 @@ class CheckVehicleApp(tk.Tk):
             try:
                 manifest = fetch_tesseract_manifest(manifest_url)
                 executable = stage_tesseract_archive(manifest, self._tesseract_component_root())
-                validate_tesseract_component(executable)
+                validate_tesseract_component(executable, expected_version=manifest.version, smoke_image=self._tesseract_smoke_fixture())
+                executable = activate_tesseract_stage(executable, manifest, self._tesseract_component_root())
             except Exception:
+                if "executable" in locals():
+                    discard_tesseract_stage(executable, self._tesseract_component_root())
                 self.event_queue.put(("tesseract_status", "Không thể tải hoặc xác minh gói Tesseract. Bản hiện tại vẫn được giữ nguyên."))
             else:
-                self.event_queue.put(("tesseract_staged", executable))
+                self.event_queue.put(("tesseract_staged", executable, manifest))
 
         threading.Thread(target=worker, name="check_vehicle_tesseract_stage", daemon=True).start()
 
@@ -1132,6 +1160,8 @@ class CheckVehicleApp(tk.Tk):
                     paddle_scan_mode=paddle_scan_mode,
                     retry_failed=retry_failed,
                     batch_session=batch_session,
+                    tesseract_fallback_enabled=tesseract_fallback_enabled,
+                    tesseract_path=tesseract_path,
                 )
                 return
             manager = WorkerManager(settings, engine_mode, self.stop_event)
@@ -1179,6 +1209,7 @@ class CheckVehicleApp(tk.Tk):
                     image_bgr=image_bgr,
                     image_size=image_size,
                     tesseract_fallback_enabled=tesseract_fallback_enabled,
+                    selected_plate_type=batch_session.selected_plate_type if batch_session else PlateType.NONE,
                 )
 
             def on_started(item: WorkItem[Path], pool: str) -> None:
@@ -1236,6 +1267,8 @@ class CheckVehicleApp(tk.Tk):
         paddle_scan_mode: str,
         retry_failed: bool,
         batch_session: BatchSession | None,
+        tesseract_fallback_enabled: bool = False,
+        tesseract_path: str | None = None,
     ) -> None:
         """Run all local OCR first, then a bounded AI-review pass.
 
@@ -1286,13 +1319,25 @@ class CheckVehicleApp(tk.Tk):
 
         def local_infer(prepared):
             image, image_bgr, image_size = prepared
-            return process_image(
+            local_result = process_image(
                 image,
                 crop_dir,
                 engine.local_engine,
                 blur_threshold,
                 max(20.0, confidence_threshold - 10.0),
                 paddle_scan_mode=paddle_scan_mode,
+                image_bgr=image_bgr,
+                image_size=image_size,
+            )
+            return _run_tesseract_fallback_if_needed(
+                local_result,
+                image,
+                crop_dir,
+                tesseract_fallback_enabled,
+                tesseract_path,
+                blur_threshold,
+                confidence_threshold,
+                batch_session.selected_plate_type if batch_session else PlateType.NONE,
                 image_bgr=image_bgr,
                 image_size=image_size,
             )
@@ -1451,6 +1496,7 @@ class CheckVehicleApp(tk.Tk):
         image_bgr=None,
         image_size: tuple[int, int] | None = None,
         tesseract_fallback_enabled: bool = False,
+        selected_plate_type: PlateType = PlateType.NONE,
     ) -> ImageResult:
         _ = index
         if engine_mode == "GPT Vision":
@@ -1467,13 +1513,25 @@ class CheckVehicleApp(tk.Tk):
         if engine_mode == "Plate Recognizer":
             return engine.analyze_image(image, blur_threshold)
         if engine_mode == "PaddleOCR Local":
-            return process_image(
+            local_result = process_image(
                 image,
                 crop_dir,
                 engine,
                 blur_threshold,
                 max(20.0, confidence_threshold - 10.0),
                 paddle_scan_mode=paddle_scan_mode,
+                image_bgr=image_bgr,
+                image_size=image_size,
+            )
+            return _run_tesseract_fallback_if_needed(
+                local_result,
+                image,
+                crop_dir,
+                tesseract_fallback_enabled,
+                tesseract_path,
+                blur_threshold,
+                confidence_threshold,
+                selected_plate_type,
                 image_bgr=image_bgr,
                 image_size=image_size,
             )
@@ -1732,8 +1790,8 @@ class CheckVehicleApp(tk.Tk):
                     _, message = event
                     self.paddle_update_status_var.set(message)
                 elif kind == "tesseract_staged":
-                    _, executable = event
-                    self._set_tesseract_executable(Path(executable), "Đã chuẩn bị Tesseract dự phòng đã xác minh.")
+                    _, executable, manifest = event
+                    self._set_tesseract_executable(Path(executable), "Đã chuẩn bị Tesseract dự phòng đã xác minh.", manifest)
                     self.refresh_tesseract_status()
                 elif kind == "model_staged":
                     _, result = event
@@ -2373,15 +2431,40 @@ class CheckVehicleApp(tk.Tk):
         self.after(250, self._on_close)
 
     def show_paddle_update_details(self) -> None:
-        self.show_settings_section("updates")
-        toggle = self.toggle_update_technical_details
-        visible = self.update_technical_details_visible
-        if callable(toggle) and (not callable(visible) or not visible()):
-            toggle()
+        self.show_recognition_runtime_info()
+
+    def show_recognition_runtime_info(self) -> None:
+        """Display versions obtained from the installed runtime, not UI constants."""
+
+        runtime = paddle_runtime_info()
+        detection_model, recognition_model = current_model_selection()
+        dialog = tk.Toplevel(self)
+        dialog.title("Thông tin công cụ nhận diện")
+        dialog.transient(self)
+        dialog.resizable(False, False)
+        body = ttk.Frame(dialog, style="App.TFrame", padding=16)
+        body.grid(sticky="nsew")
+        ttk.Label(body, text="Thông tin công cụ nhận diện", style="PageTitle.TLabel").grid(row=0, column=0, sticky="w")
+        entries = (
+            ("PaddleOCR", runtime.paddleocr_version),
+            ("PaddlePaddle", runtime.paddlepaddle_version),
+            ("PaddleX", runtime.paddlex_version or "Chưa cài"),
+            ("Model nhận diện", detection_model),
+            ("Model đọc chữ", recognition_model),
+        )
+        for row, (label, value) in enumerate(entries, start=1):
+            ttk.Label(body, text=label, style="SurfaceMuted.TLabel").grid(row=row, column=0, sticky="w", padx=(0, 16), pady=3)
+            ttk.Label(body, text=value, style="Surface.TLabel", wraplength=410).grid(row=row, column=1, sticky="w", pady=3)
+        ttk.Button(body, text="Đóng", command=dialog.destroy).grid(row=len(entries) + 1, column=1, sticky="e", pady=(14, 0))
 
     def refresh_update_center_state(self) -> None:
         runtime = paddle_runtime_info()
-        self.paddle_runtime_var.set(f"Đang dùng: PaddleOCR {runtime.paddleocr_version}")
+        detection_model, recognition_model = current_model_selection()
+        self.paddle_runtime_var.set(
+            f"Đang dùng: PaddleOCR {runtime.paddleocr_version} • "
+            f"PaddlePaddle {runtime.paddlepaddle_version} • PaddleX {runtime.paddlex_version or 'Chưa cài'} • "
+            f"Model {detection_model} / {recognition_model}"
+        )
         self.paddle_update_status_var.set(f"Mới nhất đã kiểm thử: đi kèm Check Vehicle OCR {__version__}.")
         self.paddle_compatibility_var.set("PaddleOCR chỉ thay đổi cùng bản phát hành ứng dụng đã qua kiểm thử.")
         inventory = paddle_model_inventory()
@@ -3410,6 +3493,10 @@ class CheckVehicleApp(tk.Tk):
                 "plate_recognizer_region": self.plate_recognizer_region_var.get().strip() or DEFAULT_PLATE_RECOGNIZER_REGION,
                 "tesseract_path": self.tesseract_var.get().strip(),
                 "tesseract_previous_path": self.tesseract_previous_path_var.get().strip(),
+                "tessdata_path": self.tessdata_path_var.get().strip(),
+                "tesseract_component_version": self.tesseract_component_version_var.get().strip(),
+                "tesseract_component_sha256": self.tesseract_component_sha256_var.get().strip(),
+                "tesseract_installed_at": self.tesseract_installed_at_var.get().strip(),
                 "tesseract_fallback_enabled": bool(self.tesseract_fallback_enabled_var.get()),
                 "recursive": bool(self.recursive_var.get()),
                 "blur_threshold": float(self.blur_threshold_var.get()),
@@ -3837,6 +3924,60 @@ def _needs_local_fallback(result: ImageResult) -> bool:
     if not any(plate.final_text for plate in result.plates):
         return True
     return result.status in {"UNREADABLE", "BLURRY"}
+
+
+def _needs_paddle_tesseract_fallback(result: ImageResult, confidence_threshold: float) -> bool:
+    if result.status == "ERROR" or not result.plates:
+        return True
+    readable = [plate for plate in result.plates if plate.readable and plate.final_text]
+    if not readable:
+        return True
+    return any(
+        plate.needs_review
+        or plate.confidence < confidence_threshold
+        or not plate.normalized_text
+        for plate in readable
+    )
+
+
+def _run_tesseract_fallback_if_needed(
+    paddle_result: ImageResult,
+    image: Path,
+    crop_dir: Path,
+    enabled: bool,
+    tesseract_path: str | None,
+    blur_threshold: float,
+    confidence_threshold: float,
+    plate_type: PlateType,
+    *,
+    image_bgr=None,
+    image_size: tuple[int, int] | None = None,
+) -> ImageResult:
+    """Run bounded local fallback only for uncertain PaddleOCR results."""
+
+    if plate_type is not PlateType.NONE:
+        for plate in paddle_result.plates:
+            plate.apply_plate_formatting(plate_type)
+    if not enabled or not _needs_paddle_tesseract_fallback(paddle_result, confidence_threshold):
+        return paddle_result
+    fallback = TesseractOcrEngine(tesseract_path, confidence_threshold)
+    if not fallback.available:
+        paddle_result.warnings.append("Tesseract dự phòng chưa sẵn sàng; giữ kết quả PaddleOCR.")
+        return paddle_result
+    try:
+        tesseract_result = process_image(
+            image,
+            crop_dir,
+            fallback,
+            blur_threshold,
+            max(20.0, confidence_threshold - 10.0),
+            image_bgr=image_bgr,
+            image_size=image_size,
+        )
+    except Exception:
+        paddle_result.warnings.append("Tesseract dự phòng không xử lý được ảnh này; batch tiếp tục bằng PaddleOCR.")
+        return paddle_result
+    return apply_fallback_selection(paddle_result, tesseract_result, plate_type)
 
 
 def _merge_gemini_local_result(gemini_result: ImageResult, local_result: ImageResult) -> ImageResult:

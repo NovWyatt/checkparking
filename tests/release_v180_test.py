@@ -15,7 +15,7 @@ from check_vehicle_ocr.version import DEFAULT_GITHUB_REPOSITORY, VERSION
 
 
 def main() -> int:
-    assert VERSION == "1.8.0"
+    assert VERSION == "1.9.0"
     assert DEFAULT_GITHUB_REPOSITORY == "NovWyatt/checkparking"
     icon_root = ROOT / "assets" / "icons"
     for size in (16, 20, 24, 32, 48, 64, 128, 256):

@@ -40,12 +40,13 @@ class IndependentPaddleEngine:
     def __init__(self):
         if PaddleOCR is None:
             raise RuntimeError("PaddleOCR không khả dụng.")
-        model_dirs = paddle_module._bundled_model_dirs()
+        detection_model, recognition_model = paddle_module.current_model_selection()
+        model_dirs = paddle_module._bundled_model_dirs(detection_model, recognition_model)
         self.ocr = PaddleOCR(
-            text_detection_model_name="PP-OCRv5_mobile_det",
-            text_detection_model_dir=model_dirs.get("PP-OCRv5_mobile_det"),
-            text_recognition_model_name="en_PP-OCRv5_mobile_rec",
-            text_recognition_model_dir=model_dirs.get("en_PP-OCRv5_mobile_rec"),
+            text_detection_model_name=detection_model,
+            text_detection_model_dir=model_dirs.get(detection_model),
+            text_recognition_model_name=recognition_model,
+            text_recognition_model_dir=model_dirs.get(recognition_model),
             use_doc_orientation_classify=False,
             use_doc_unwarping=False,
             use_textline_orientation=False,

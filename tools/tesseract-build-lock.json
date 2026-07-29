@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "tesseract": {
+    "tag": "5.5.3",
+    "commit": "db0ec62f81b0737fbbe184d8fea40af5738f8eef",
+    "repository": "https://github.com/tesseract-ocr/tesseract.git"
+  },
+  "tessdata_fast": {
+    "tag": "4.1.0",
+    "commit": "65727574dfcd264acbb0c3e07860e4e9e9b22185",
+    "repository": "https://github.com/tesseract-ocr/tessdata_fast.git"
+  },
+  "msys2_ucrt64_packages": {
+    "mingw-w64-ucrt-x86_64-gcc": "15.2.0-13",
+    "mingw-w64-ucrt-x86_64-cmake": "4.2.3-1",
+    "mingw-w64-ucrt-x86_64-ninja": "1.13.2-1",
+    "mingw-w64-ucrt-x86_64-pkgconf": "1~2.5.1-1",
+    "mingw-w64-ucrt-x86_64-leptonica": "1.87.0-1",
+    "mingw-w64-ucrt-x86_64-icu": "78.2-1"
+  }
+}

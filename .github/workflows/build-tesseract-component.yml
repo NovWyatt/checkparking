@@ -1,0 +1,69 @@
+name: Build verified Tesseract component
+
+on:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      TESSERACT_TAG: "5.5.3"
+      TESSERACT_COMMIT: "db0ec62f81b0737fbbe184d8fea40af5738f8eef"
+      TESSDATA_TAG: "4.1.0"
+      TESSDATA_COMMIT: "65727574dfcd264acbb0c3e07860e4e9e9b22185"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            git
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-pkgconf
+            mingw-w64-ucrt-x86_64-leptonica
+            mingw-w64-ucrt-x86_64-zlib
+            mingw-w64-ucrt-x86_64-libjpeg-turbo
+            mingw-w64-ucrt-x86_64-libtiff
+            mingw-w64-ucrt-x86_64-libpng
+            mingw-w64-ucrt-x86_64-icu
+      - name: Checkout pinned official Tesseract and tessdata source
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
+          git clone --depth 1 --branch "$TESSERACT_TAG" https://github.com/tesseract-ocr/tesseract.git .runtime/tesseract-source
+          test "$(git -C .runtime/tesseract-source rev-parse HEAD)" = "$TESSERACT_COMMIT"
+          test "$(git -C .runtime/tesseract-source describe --exact-match --tags HEAD)" = "$TESSERACT_TAG"
+          git clone --depth 1 --branch "$TESSDATA_TAG" https://github.com/tesseract-ocr/tessdata_fast.git .runtime/tessdata-fast
+          test "$(git -C .runtime/tessdata-fast rev-parse HEAD)" = "$TESSDATA_COMMIT"
+      - name: Build Tesseract Windows x64 from official source
+        shell: msys2 {0}
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
+          cmake -S .runtime/tesseract-source -B .runtime/tesseract-build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$PWD/.runtime/tesseract-install" -DBUILD_SHARED_LIBS=ON -DBUILD_TRAINING_TOOLS=OFF -DBUILD_TESTS=OFF -DGRAPHICS_DISABLED=ON -DDISABLED_LEGACY_ENGINE=ON -DDISABLE_ARCHIVE=ON -DDISABLE_CURL=ON -DUSE_SYSTEM_ICU=ON -DENABLE_NATIVE=OFF -DENABLE_CCACHE=OFF
+          cmake --build .runtime/tesseract-build --parallel 2
+          cmake --install .runtime/tesseract-build
+          .runtime/tesseract-install/bin/tesseract.exe --version | grep -F "tesseract $TESSERACT_TAG"
+          ldd .runtime/tesseract-install/bin/tesseract.exe
+      - name: Package, hash and smoke-test component
+        shell: pwsh
+        run: |
+          python tools\build_tesseract_component.py --install-dir .runtime\tesseract-install --runtime-dll-dir C:\msys64\ucrt64\bin --source-dir .runtime\tesseract-source --tessdata-dir .runtime\tessdata-fast --output-dir component-assets --version $env:TESSERACT_TAG --source-tag $env:TESSERACT_TAG --source-commit $env:TESSERACT_COMMIT --tessdata-commit $env:TESSDATA_COMMIT --repository NovWyatt/checkparking --tag "${{ github.ref_name }}"
+          python tools\validate_tesseract_component.py --archive component-assets\CheckVehicleOCR-Tesseract-$env:TESSERACT_TAG-win-x64.zip --manifest component-assets\tesseract-component-manifest.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tesseract-component
+          path: component-assets/
+          if-no-files-found: error

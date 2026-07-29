@@ -200,6 +200,8 @@ def _test_update_center_primary_actions() -> None:
             app.check_for_updates()
             assert app.update_status_var.get() == "Chưa cấu hình nguồn cập nhật ứng dụng."
             assert app.update_check_button.cget("text") == "Thiết lập nguồn"
+            assert "NovWyatt/checkparking" in app.tesseract_manifest_url_var.get()
+            app.tesseract_manifest_url_var.set("")
             app.stage_tesseract_from_manifest()
             assert "Chưa cấu hình nguồn gói xác minh" in app.tesseract_status_var.get()
 

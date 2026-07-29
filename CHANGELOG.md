@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.9.0 — OCR runtime đã kiểm thử và Tesseract cài một chạm
+
+- Nâng runtime đóng gói lên PaddleOCR 3.7.0, PaddlePaddle 3.3.1 và PaddleX 3.7.2.
+- Đặt PP-OCRv6 Small làm model mặc định; PP-OCRv6 Tiny phục vụ chế độ tiết kiệm tài nguyên, còn PP-OCRv5 được giữ để quay lại khi cần.
+- Thêm metadata runtime có version, model, hash và commit build; giao diện hiển thị version thực tế của công cụ nhận diện.
+- Đóng gói Tesseract 5.5.3 Windows x64 từ source tag chính thức, kèm tessdata_fast `eng`/`osd` đã pin, hash từng file và cài đặt một chạm vào LocalAppData.
+- Tesseract chỉ được dùng làm fallback có điều kiện; ứng dụng giữ bằng chứng từ cả hai engine và đánh dấu review khi hai kết quả không đủ rõ ràng.
+- Thêm manifest/model component, kiểm tra hash, giới hạn kích thước, chống Zip Slip, staging nguyên tử và rollback theo version.
+
 ## 1.8.0 — Chọn loại biển số, luồng hybrid rõ ràng và giao diện phát hành
 
 - Thêm lựa chọn loại biển số theo batch: Xe máy, Ô tô hoặc Không tự định dạng.

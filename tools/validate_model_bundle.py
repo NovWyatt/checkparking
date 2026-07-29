@@ -3,15 +3,25 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import tempfile
 from pathlib import Path
+
+
+# Must be configured before PaddleOCR imports PaddlePaddle.  PaddlePaddle 3.x
+# CPU inference on Windows can otherwise select a oneDNN PIR path that rejects
+# these bundled PP-OCR profiles during the staging smoke test.
+os.environ.setdefault("PADDLE_PDX_ENABLE_MKLDNN_BYDEFAULT", "0")
+os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--detection-dir", type=Path, required=True)
     parser.add_argument("--recognition-dir", type=Path, required=True)
+    parser.add_argument("--detection-model", default="PP-OCRv6_small_det")
+    parser.add_argument("--recognition-model", default="PP-OCRv6_small_rec")
     args = parser.parse_args()
     if not (args.detection_dir / "inference.yml").is_file() or not (args.recognition_dir / "inference.yml").is_file():
         return 2
@@ -20,9 +30,9 @@ def main() -> int:
         from paddleocr import PaddleOCR
 
         engine = PaddleOCR(
-            text_detection_model_name="PP-OCRv5_mobile_det",
+            text_detection_model_name=args.detection_model,
             text_detection_model_dir=str(args.detection_dir),
-            text_recognition_model_name="en_PP-OCRv5_mobile_rec",
+            text_recognition_model_name=args.recognition_model,
             text_recognition_model_dir=str(args.recognition_dir),
             use_doc_orientation_classify=False,
             use_doc_unwarping=False,

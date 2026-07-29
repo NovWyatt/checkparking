@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "synthetic_only": true,
+  "profiles": {
+    "pp-ocrv6-small": {
+      "status": "passed",
+      "detection_model": "PP-OCRv6_small_det",
+      "recognition_model": "PP-OCRv6_small_rec",
+      "cold_init_seconds": 2.1988,
+      "first_inference_seconds": 1.1601,
+      "warm_batches": {
+        "10": {
+          "seconds": 11.3235,
+          "images_per_minute": 52.99,
+          "result_count": 10
+        },
+        "30": {
+          "seconds": 37.734,
+          "images_per_minute": 47.7,
+          "result_count": 30
+        }
+      },
+      "working_set_delta_mb": 268.86,
+      "package_model_bytes": 31534155,
+      "first_result_count": 1
+    }
+  },
+  "tesseract_5_5_3": {
+    "status": "passed",
+    "first_inference_seconds": 0.7207,
+    "first_text": "",
+    "warm_batches": {
+      "10": {
+        "seconds": 1.7669,
+        "images_per_minute": 339.58,
+        "nonempty": 0
+      }
+    }
+  },
+  "paddle_tesseract_fallback": {
+    "status": "policy-only",
+    "note": "Fallback runs only for an unreadable, low-confidence, ambiguous or unmatched PaddleOCR candidate; this synthetic batch did not force fallback."
+  }
+}

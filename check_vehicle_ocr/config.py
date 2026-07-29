@@ -11,7 +11,9 @@ from typing import Any
 
 APP_DIR_NAME = "CheckVehicleOCR"
 SETTINGS_FILE = "settings.json"
-SETTINGS_VERSION = 17
+SETTINGS_VERSION = 18
+DEFAULT_TESSERACT_MANIFEST_URL = "https://github.com/NovWyatt/checkparking/releases/latest/download/tesseract-component-manifest.json"
+DEFAULT_MODEL_MANIFEST_URL = "https://github.com/NovWyatt/checkparking/releases/latest/download/model-manifest.json"
 
 # These values were used only by early UI tests.  They must never behave as a
 # release source in a real operator profile.  Keep this exact, small list: a
@@ -114,8 +116,12 @@ def migrate_settings(data: dict[str, Any]) -> dict[str, Any]:
         updates["github_token_dpapi"] = _protect_text(legacy_github_token)
     updates.setdefault("paddle_release_source", "https://pypi.org/pypi/paddleocr/json")
     updates.setdefault("paddle_candidate_version", "")
-    updates.setdefault("model_manifest_url", "")
-    updates.setdefault("tesseract_manifest_url", "")
+    updates.setdefault("model_manifest_url", DEFAULT_MODEL_MANIFEST_URL)
+    updates.setdefault("tesseract_manifest_url", DEFAULT_TESSERACT_MANIFEST_URL)
+    migrated.setdefault("tessdata_path", "")
+    migrated.setdefault("tesseract_component_version", "")
+    migrated.setdefault("tesseract_component_sha256", "")
+    migrated.setdefault("tesseract_installed_at", "")
     engine = str(migrated.get("engine") or "PaddleOCR Local")
     recognition_mode = str(migrated.get("recognition_mode") or "").strip()
     if recognition_mode not in {"local", "local_ai_review", "online"}:

@@ -12,7 +12,14 @@ vendor_tesseract = project_root / "vendor" / "tesseract"
 paddle_libs = Path(paddle.__file__).resolve().parent / "libs"
 onnx_plate_model_name = "yolo-v9-t-384-license-plate-end2end"
 onnx_plate_model_file = "yolo-v9-t-384-license-plates-end2end.onnx"
-paddleocr_model_names = ("PP-OCRv5_mobile_det", "en_PP-OCRv5_mobile_rec")
+paddleocr_model_names = (
+    "PP-OCRv6_small_det",
+    "PP-OCRv6_small_rec",
+    "PP-OCRv6_tiny_det",
+    "PP-OCRv6_tiny_rec",
+    "PP-OCRv5_mobile_det",
+    "en_PP-OCRv5_mobile_rec",
+)
 binaries = [(str(dll), "paddle/libs") for dll in paddle_libs.glob("*.dll")]
 
 
@@ -35,11 +42,17 @@ datas = collect_data_files("paddlex") + collect_data_files("paddleocr")
 model_manifest = project_root / "models" / "manifest.json"
 if model_manifest.is_file():
     datas.append((str(model_manifest), "models"))
+runtime_versions = project_root / "build" / "runtime-versions.json"
+if runtime_versions.is_file():
+    datas.append((str(runtime_versions), "build"))
 icons_dir = project_root / "assets" / "icons"
 if icons_dir.is_dir():
     datas.append((str(icons_dir), "assets/icons"))
+tesseract_assets = project_root / "assets" / "tesseract"
+if tesseract_assets.is_dir():
+    datas.append((str(tesseract_assets), "assets/tesseract"))
 for model_name in paddleocr_model_names:
-    model_dir = Path.home() / ".paddlex" / "official_models" / model_name
+    model_dir = project_root / "models" / "paddleocr" / model_name
     if model_dir.exists():
         datas.append((str(model_dir), f"models/paddleocr/{model_name}"))
 for detector_model_path in (

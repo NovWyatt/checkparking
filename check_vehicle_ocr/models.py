@@ -54,6 +54,14 @@ class PlateCandidate:
     format_reason: str = ""
     manual_correction: str = ""
     ocr_needs_review: bool | None = None
+    paddle_raw: str = ""
+    paddle_candidate: str = ""
+    paddle_confidence: float = 0.0
+    tesseract_raw: str = ""
+    tesseract_candidate: str = ""
+    tesseract_confidence: float = 0.0
+    selected_engine: str = ""
+    selection_reason: str = ""
 
     @property
     def final_text(self) -> str:

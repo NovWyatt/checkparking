@@ -12,7 +12,7 @@ Tool desktop Python de import hang loat anh xe, nhan dien bien so bang OCR va xu
   - `Plate Recognizer`: API chuyen doc bien so xe, mac dinh region `vn`, nen uu tien cho bai toan bai xe/nhieu xe.
   - `GPT Vision`: gui anh da resize/nen len OpenAI de doc bien so.
   - `Local OCR`: xu ly local bang OpenCV + Tesseract, dung khi khong co API key.
-- `PaddleOCR Local` dung PP-OCRv5 mobile detection/recognition, phu hop chay mien phi tren may local; lan dau co the mat them thoi gian de Paddle tai/cache model.
+- `PaddleOCR Local` trong bản phát hành 1.9.0 dùng PP-OCRv6 Small đã bundle; chế độ tiết kiệm tài nguyên dùng PP-OCRv6 Tiny. PP-OCRv5 Mobile vẫn được giữ trong registry để quay lại khi cần.
 - `PaddleOCR Local` co them ONNX license-plate detector `yolo-v9-t-384-license-plate-end2end` de tim dung box bien so truoc khi OCR; model nhe, chay CPU local, giup anh nhieu xe it sot bien hon ma khong phu thuoc API.
 - Khi dung PaddleOCR, app tach cac dong OCR gan nhau thanh tung bien so rieng de mot anh co the tra ve nhieu bien so, dong thoi loc time mark/timestamp nhu `26 Thang 5, 2026`, ngay gio, watermark camera.
 - Pipeline PaddleOCR uu tien toc do: `Nhanh` va `Can bang` uu tien luong Paddle nhe, chi dung ONNX khi can cuu anh fail; `Quet ky` moi bat ONNX ngay tu dau de bat nhieu xe hon.
@@ -73,9 +73,10 @@ Tao Windows executable, installer va release assets da co SHA-256:
 .\build_release_assets.ps1 -SkipBuild
 ```
 
-Chi release asset trong `release-assets\` duoc upload: installer Windows x64,
-portable ZIP, manifest va `SHA256SUMS.txt`. Khong upload settings, token,
-anh/output nguoi dung, `.venv`, `.runtime` hay audit output.
+Chỉ upload asset trong `release-assets\`: installer Windows x64, portable ZIP,
+manifest cập nhật, runtime/model metadata, component Tesseract đã xác minh và
+`SHA256SUMS.txt`. Không upload settings, token, ảnh/output người dùng, `.venv`,
+`.runtime` hay audit output.
 
 ## OCR engine
 
@@ -93,25 +94,13 @@ Khuyen nghi neu muon dung Gemini de doi chieu: chon `Gemini Vision`, dung model 
 
 Neu can doi chieu them, co the thu `Plate Recognizer` cho bai toan bai xe/nhieu xe, `GPT Vision` neu ban da co OpenAI key, hoac `Local OCR`/Tesseract khi PaddleOCR gap anh kho.
 
-Neu dung `Local OCR`, app can Tesseract OCR. App se tu tim theo thu tu:
-
-1. Duong dan ban chon trong giao dien.
-2. Bien moi truong `CHECK_VEHICLE_TESSERACT`.
-3. Folder bundle canh file exe: `tesseract\tesseract.exe`.
-4. Cac duong dan cai dat pho bien cua Tesseract tren Windows.
-5. `tesseract.exe` trong PATH.
-
-Ban nen dung ban Tesseract Windows cua UB Mannheim:
-
-https://github.com/UB-Mannheim/tesseract/wiki
-
-Neu muon installer Inno Setup bundle san Tesseract, cai Tesseract truoc roi chay:
-
-```powershell
-.\tools\prepare_tesseract_vendor.ps1
-```
-
-Script nay se copy folder Tesseract dang cai tren may vao `vendor\tesseract`.
+Tesseract là fallback tùy chọn. Trong Update Center, chọn **Cài đặt** để tải
+component Windows x64 đã được dự án build từ source Tesseract chính thức, kiểm
+SHA-256 archive/từng file, OCR smoke test và tự lưu path trong LocalAppData.
+Ứng dụng không yêu cầu PATH, quyền Administrator hoặc installer bên thứ ba.
+Khi PaddleOCR đọc rõ biển số, Tesseract không được gọi để tránh làm chậm batch.
+Xem [hướng dẫn component](docs/TESSERACT_COMPONENT_RELEASE.md) để biết quy
+trình phát hành và rollback.
 
 ## Build exe
 

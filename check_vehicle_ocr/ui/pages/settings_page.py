@@ -140,6 +140,13 @@ class SettingsPage(Page):
         controller.paddle_stage_button.grid(row=2, column=0, sticky="w")
         ttk.Button(paddle_card, text="Chi tiết", command=controller.show_paddle_update_details).grid(row=2, column=1, sticky="e")
 
+        model_card = self._card(parent, "Mô hình OCR")
+        ttk.Label(model_card, textvariable=controller.model_inventory_var, style="Surface.TLabel", wraplength=760).grid(row=0, column=0, sticky="w")
+        ttk.Label(model_card, text="Chỉ dùng model đã được tải, kiểm hash và thử nghiệm.", style="SurfaceMuted.TLabel", wraplength=760).grid(row=1, column=0, sticky="w", pady=(4, 8))
+        controller.model_manage_button = ttk.Button(model_card, text="Cập nhật", command=controller.stage_model_from_manifest, style="Primary.TButton")
+        controller.model_manage_button.grid(row=2, column=0, sticky="w")
+        ttk.Button(model_card, text="Chi tiết", command=controller.manage_models).grid(row=2, column=1, sticky="e")
+
         tesseract_card = self._card(parent, "Tesseract dự phòng")
         ttk.Label(tesseract_card, textvariable=controller.tesseract_status_var, style="Surface.TLabel", wraplength=760).grid(row=0, column=0, sticky="w")
         ttk.Label(tesseract_card, text="Không bắt buộc khi PaddleOCR hoạt động.", style="SurfaceMuted.TLabel").grid(row=1, column=0, sticky="w", pady=(4, 8))
@@ -148,9 +155,9 @@ class SettingsPage(Page):
         ttk.Button(tesseract_card, text="Chi tiết", command=controller.manage_tesseract).grid(row=2, column=1, sticky="e")
 
         details_toggle = ttk.Button(parent, text="Hiển thị chi tiết kỹ thuật")
-        details_toggle.grid(row=4, column=0, sticky="w", pady=(4, 0))
+        details_toggle.grid(row=5, column=0, sticky="w", pady=(4, 0))
         details = ttk.LabelFrame(parent, text="Chi tiết kỹ thuật", style="Card.TLabelframe")
-        details.grid(row=5, column=0, sticky="ew", pady=(6, 0))
+        details.grid(row=6, column=0, sticky="ew", pady=(6, 0))
         details.columnconfigure(1, weight=1)
         labelled_combo(details, 0, "Nguồn ứng dụng", controller.update_source_mode_var, ("Tắt cập nhật", "GitHub Releases", "Manifest tùy chỉnh"), readonly=True)
         labelled_entry(details, 1, "Repository GitHub", controller.github_repository_var)
@@ -188,7 +195,8 @@ class SettingsPage(Page):
 
         app_card.grid_configure(row=1, column=0, sticky="ew")
         paddle_card.grid_configure(row=2, column=0, sticky="ew")
-        tesseract_card.grid_configure(row=3, column=0, sticky="ew")
+        model_card.grid_configure(row=3, column=0, sticky="ew")
+        tesseract_card.grid_configure(row=4, column=0, sticky="ew")
 
     def _build_advanced(self, parent, controller) -> None:
         workers = self._card(parent, "Hiệu năng và xử lý kỹ thuật")
@@ -205,7 +213,7 @@ class SettingsPage(Page):
         labelled_entry(workers, 7, "Nguồn manifest model", controller.model_manifest_url_var)
 
         fallback = self._card(parent, "OCR dự phòng — Tesseract")
-        ttk.Checkbutton(fallback, text="Cho phép dùng Tesseract khi AI trực tuyến không đọc được", variable=controller.tesseract_fallback_enabled_var).grid(
+        ttk.Checkbutton(fallback, text="Dùng Tesseract dự phòng khi PaddleOCR không chắc chắn", variable=controller.tesseract_fallback_enabled_var).grid(
             row=0, column=0, columnspan=2, sticky="w", pady=(0, 6)
         )
         labelled_entry(fallback, 1, "Đường dẫn Tesseract", controller.tesseract_var)

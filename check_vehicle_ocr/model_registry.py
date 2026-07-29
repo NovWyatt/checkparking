@@ -19,6 +19,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Mapping
 
+from .ocr_models import DEFAULT_MODEL_PROFILE, profile_for_models
+
 
 @dataclass(frozen=True)
 class ModelValidationReport:
@@ -71,12 +73,21 @@ class ModelRuntimeManager:
             str(detection_dir),
             "--recognition-dir",
             str(recognition_dir),
+            "--detection-model",
+            detection_model,
+            "--recognition-model",
+            recognition_model,
         )
         try:
             result = runner(
                 list(command),
                 cwd=str(self.project_root),
-                env={**os.environ, "PYTHONNOUSERSITE": "1", "PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK": "True"},
+                env={
+                    **os.environ,
+                    "PYTHONNOUSERSITE": "1",
+                    "PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK": "True",
+                    "PADDLE_PDX_ENABLE_MKLDNN_BYDEFAULT": "0",
+                },
                 capture_output=True,
                 text=True,
                 timeout=timeout,
@@ -108,6 +119,8 @@ class ModelRuntimeManager:
             "stage_dir": str(self.stage_dir(candidate)),
             "detection_dir": str(acceptance["detection_dir"]),
             "recognition_dir": str(acceptance["recognition_dir"]),
+            "detection_model": str(acceptance.get("detection_model") or DEFAULT_MODEL_PROFILE.detection_model),
+            "recognition_model": str(acceptance.get("recognition_model") or DEFAULT_MODEL_PROFILE.recognition_model),
         }
         registry = self.read_registry()
         previous = registry.get("active") if isinstance(registry.get("active"), dict) else None
@@ -131,10 +144,19 @@ class ModelRuntimeManager:
         active = self.read_registry().get("active")
         if not isinstance(active, dict) or not _registry_entry_valid(active):
             return {}
-        return {
-            "PP-OCRv5_mobile_det": str(active["detection_dir"]),
-            "en_PP-OCRv5_mobile_rec": str(active["recognition_dir"]),
-        }
+        detection_model, recognition_model = self.active_model_selection() or ("", "")
+        return {detection_model: str(active["detection_dir"]), recognition_model: str(active["recognition_dir"])}
+
+    def active_model_selection(self) -> tuple[str, str] | None:
+        """Return an accepted selected model pair, with a v1.8 migration."""
+
+        active = self.read_registry().get("active")
+        if not isinstance(active, dict) or not _registry_entry_valid(active):
+            return None
+        # v1.8 registries predate explicit names and were always the v5 pair.
+        detection_model = str(active.get("detection_model") or "PP-OCRv5_mobile_det")
+        recognition_model = str(active.get("recognition_model") or "en_PP-OCRv5_mobile_rec")
+        return (detection_model, recognition_model) if profile_for_models(detection_model, recognition_model) else None
 
     def read_registry(self) -> dict[str, object]:
         return _read_json(self.registry_path)
@@ -146,6 +168,8 @@ class ModelRuntimeManager:
             "summary": report.summary,
             "detection_dir": str(report.stage_dir / detection_model),
             "recognition_dir": str(report.stage_dir / recognition_model),
+            "detection_model": detection_model,
+            "recognition_model": recognition_model,
         }
         _atomic_json_write(report.stage_dir / "acceptance.json", payload)
 

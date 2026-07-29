@@ -4,12 +4,18 @@
 #endif
 #define MyAppPublisher "Check Vehicle"
 #define MyAppExeName "CheckVehicleOCR.exe"
+#ifndef MyAppId
+#define MyAppId "{{9F7D0429-9F2E-4B51-B579-F978E00C3D0A}"
+#endif
 #ifndef SourceDir
 #define SourceDir "..\release\CheckVehicleOCR"
 #endif
+#ifndef OutputDir
+#define OutputDir "Output"
+#endif
 
 [Setup]
-AppId={{9F7D0429-9F2E-4B51-B579-F978E00C3D0A}
+AppId={#MyAppId}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
@@ -17,7 +23,7 @@ DefaultDirName={localappdata}\Programs\CheckVehicleOCR
 DefaultGroupName={#MyAppName}
 PrivilegesRequired=lowest
 DisableProgramGroupPage=yes
-OutputDir=Output
+OutputDir={#OutputDir}
 OutputBaseFilename=CheckVehicleOCR-{#MyAppVersion}-windows-x64-setup
 Compression=lzma2
 SolidCompression=yes

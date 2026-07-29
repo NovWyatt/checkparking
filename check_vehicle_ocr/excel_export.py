@@ -59,6 +59,9 @@ def export_results(
         special_sheet = workbook.create_sheet("Bien_so_dac_biet")
         _write_special_plates(special_sheet, results)
 
+        engine_sheet = workbook.create_sheet("So_sanh_OCR")
+        _write_engine_comparison(engine_sheet, results)
+
         review_sheet = workbook.create_sheet("Can_kiem_tra")
         _write_review(review_sheet, results, blur_threshold, reviewed, media_cache, Path(temp_dir))
 
@@ -271,6 +274,49 @@ def _write_special_plates(sheet, results: list[ImageResult]) -> None:
                 ]
             )
             _add_file_links(sheet, sheet.max_row, image_col=12)
+            row_index += 1
+
+
+def _write_engine_comparison(sheet, results: list[ImageResult]) -> None:
+    """Keep both local-engine candidates out of the primary operator sheet."""
+
+    sheet.append(
+        [
+            "STT",
+            "Tên file",
+            "PaddleOCR raw",
+            "PaddleOCR candidate",
+            "PaddleOCR confidence",
+            "Tesseract raw",
+            "Tesseract candidate",
+            "Tesseract confidence",
+            "Engine được chọn",
+            "Lý do chọn",
+            "Biển số xuất Excel",
+            "Cần kiểm tra",
+        ]
+    )
+    row_index = 1
+    for result in results:
+        for plate in result.plates:
+            if not any((plate.paddle_raw, plate.paddle_candidate, plate.tesseract_raw, plate.tesseract_candidate, plate.selected_engine)):
+                continue
+            sheet.append(
+                [
+                    row_index,
+                    result.image_path.name,
+                    plate.paddle_raw,
+                    plate.paddle_candidate,
+                    round(plate.paddle_confidence, 1),
+                    plate.tesseract_raw,
+                    plate.tesseract_candidate,
+                    round(plate.tesseract_confidence, 1),
+                    plate.selected_engine,
+                    plate.selection_reason,
+                    _plate_export_text(plate),
+                    "Có" if plate.needs_review else "Không",
+                ]
+            )
             row_index += 1
 
 

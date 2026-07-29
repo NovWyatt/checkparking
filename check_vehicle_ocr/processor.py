@@ -289,6 +289,18 @@ def process_image(
         candidate.needs_review = bool(attempt.needs_review or needs_review)
         candidate.confidence = attempt.confidence
         candidate.raw_text = attempt.raw_text
+        if attempt.engine == "paddleocr":
+            candidate.paddle_raw = attempt.raw_text
+            candidate.paddle_candidate = candidate.normalized_text or attempt.text
+            candidate.paddle_confidence = attempt.confidence
+            candidate.selected_engine = "paddleocr"
+            candidate.selection_reason = "Kết quả PaddleOCR ban đầu."
+        elif attempt.engine == "tesseract":
+            candidate.tesseract_raw = attempt.raw_text
+            candidate.tesseract_candidate = candidate.normalized_text or attempt.text
+            candidate.tesseract_confidence = attempt.confidence
+            candidate.selected_engine = "tesseract"
+            candidate.selection_reason = "Kết quả Tesseract."
 
         if is_timestamp_like(candidate.raw_text) or is_timestamp_like(candidate.text) or is_timestamp_like(candidate.normalized_text):
             candidate.reason = "Bỏ qua vì giống timestamp/time mark trên ảnh"

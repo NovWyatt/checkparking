@@ -33,6 +33,9 @@ if ($Remote -match "github\.com[:/]([^/]+)/([^/]+?)(?:\.git)?$") { $Repository =
 & $Python (Join-Path $Root "tools\write_build_metadata.py") --commit $Commit --repository $Repository
 if ($LASTEXITCODE -ne 0) { throw "Không tạo được build metadata." }
 
+& $Python (Join-Path $Root "tools\write_runtime_versions.py") --output (Join-Path $Root "build\runtime-versions.json") --commit $Commit
+if ($LASTEXITCODE -ne 0) { throw "Unable to generate runtime version metadata." }
+
 if (-not $SkipModelWarmup) {
     $env:PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK = "True"
     & $Python -c "from check_vehicle_ocr.paddle_ocr_engine import _get_ocr; _get_ocr(); print('PaddleOCR models ready')"

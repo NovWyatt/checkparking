@@ -39,8 +39,9 @@ class Response(io.BytesIO):
 def test_version_and_model_manifest() -> None:
     assert VERSION.count(".") == 2 and all(part.isdigit() for part in VERSION.split("."))
     manifest = json.loads((ROOT / "models" / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["status"] == "local-unverified" and len(manifest["models"]) == 2
-    assert all(item["sha256"] is None for item in manifest["models"])
+    assert manifest["status"] == "bundled-verified" and manifest["active_profile"] == "pp-ocrv6-small"
+    assert {"PP-OCRv6_small_det", "PP-OCRv6_small_rec", "PP-OCRv5_mobile_det", "en_PP-OCRv5_mobile_rec"} <= {item["id"] for item in manifest["models"]}
+    assert all(item["sha256"] and len(item["sha256"]) == 64 for item in manifest["models"])
 
 
 def test_checksum_fallback_and_pending_helper() -> None:
@@ -119,8 +120,8 @@ def test_release_asset_tool() -> None:
             text=True,
         )
         assert "manifest" in completed.stdout
-        manifest = json.loads((output / "CheckVehicleOCR-9.9.9-manifest.json").read_text(encoding="utf-8"))
-        assert manifest["download_url"].endswith("portable.zip") and manifest["assets"][0]["sha256"]
+        manifest = json.loads((output / "update-manifest.json").read_text(encoding="utf-8"))
+        assert manifest["download_url"].endswith(".zip") and manifest["assets"][0]["sha256"]
         assert {"paddleocr", "paddlepaddle", "paddlex", "models"} <= set(manifest["ocr_runtime"])
         assert (output / "SHA256SUMS.txt").is_file()
 

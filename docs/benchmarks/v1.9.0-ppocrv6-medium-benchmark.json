@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "synthetic_only": true,
+  "profiles": {
+    "pp-ocrv6-medium": {
+      "status": "passed",
+      "detection_model": "PP-OCRv6_medium_det",
+      "recognition_model": "PP-OCRv6_medium_rec",
+      "cold_init_seconds": 2.7735,
+      "first_inference_seconds": 7.5359,
+      "warm_batches": {
+        "10": {
+          "seconds": 71.8399,
+          "images_per_minute": 8.35,
+          "result_count": 10
+        }
+      },
+      "working_set_delta_mb": 348.99,
+      "package_model_bytes": 139163884,
+      "first_result_count": 1
+    }
+  },
+  "tesseract_5_5_3": {
+    "status": "skipped",
+    "reason": "no --tesseract-exe"
+  },
+  "paddle_tesseract_fallback": {
+    "status": "policy-only",
+    "note": "Fallback runs only for an unreadable, low-confidence, ambiguous or unmatched PaddleOCR candidate; this synthetic batch did not force fallback."
+  }
+}
