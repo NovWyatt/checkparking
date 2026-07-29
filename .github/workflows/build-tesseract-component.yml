@@ -36,6 +36,14 @@ jobs:
             mingw-w64-ucrt-x86_64-libjpeg-turbo
             mingw-w64-ucrt-x86_64-libtiff
             mingw-w64-ucrt-x86_64-libpng
+            mingw-w64-ucrt-x86_64-libwebp
+            mingw-w64-ucrt-x86_64-openjpeg2
+            mingw-w64-ucrt-x86_64-giflib
+            mingw-w64-ucrt-x86_64-jbigkit
+            mingw-w64-ucrt-x86_64-libdeflate
+            mingw-w64-ucrt-x86_64-lerc
+            mingw-w64-ucrt-x86_64-xz
+            mingw-w64-ucrt-x86_64-zstd
             mingw-w64-ucrt-x86_64-icu
       - name: Checkout pinned official Tesseract and tessdata source
         shell: msys2 {0}

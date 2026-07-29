@@ -16,6 +16,14 @@
     "mingw-w64-ucrt-x86_64-ninja": "1.13.2-1",
     "mingw-w64-ucrt-x86_64-pkgconf": "1~2.5.1-1",
     "mingw-w64-ucrt-x86_64-leptonica": "1.87.0-1",
+    "mingw-w64-ucrt-x86_64-libwebp": "1.6.0-1",
+    "mingw-w64-ucrt-x86_64-openjpeg2": "2.5.4-2",
+    "mingw-w64-ucrt-x86_64-giflib": "5.2.2-1",
+    "mingw-w64-ucrt-x86_64-jbigkit": "2.1-5",
+    "mingw-w64-ucrt-x86_64-libdeflate": "1.25-1",
+    "mingw-w64-ucrt-x86_64-lerc": "4.1.0-1",
+    "mingw-w64-ucrt-x86_64-xz": "5.8.2-1",
+    "mingw-w64-ucrt-x86_64-zstd": "1.5.7-1",
     "mingw-w64-ucrt-x86_64-icu": "78.2-1"
   }
 }

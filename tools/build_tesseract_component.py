@@ -18,26 +18,31 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-RUNTIME_DLLS = (
-    "libtesseract55.dll",
-    "libgcc_s_seh-1.dll",
-    "libstdc++-6.dll",
-    "libwinpthread-1.dll",
-    "libleptonica-6.dll",
-    "libtiff-6.dll",
-    "libjbig-0.dll",
+# MSYS2 package updates can legitimately increment a DLL SONAME even though
+# Tesseract's pinned source tag is unchanged.  Resolve only these known
+# dependency families (never arbitrary DLLs), then hash their exact filenames
+# in the resulting manifest.  This keeps the component self-contained while
+# allowing the release gate to detect a real missing DLL on a fresh runner.
+RUNTIME_DLL_PATTERNS = (
+    "libtesseract*.dll",
+    "libgcc_s_*.dll",
+    "libstdc++-*.dll",
+    "libwinpthread-*.dll",
+    "libleptonica-*.dll",
+    "libtiff-*.dll",
+    "libjbig-*.dll",
     "libdeflate.dll",
-    "libjpeg-8.dll",
+    "libjpeg-*.dll",
     "libLerc.dll",
-    "liblzma-5.dll",
-    "libwebp-7.dll",
+    "liblzma-*.dll",
+    "libwebp-*.dll",
     "zlib1.dll",
     "libzstd.dll",
-    "libgif-7.dll",
-    "libwebpmux-3.dll",
-    "libopenjp2-7.dll",
-    "libpng16-16.dll",
-    "libsharpyuv-0.dll",
+    "libgif-*.dll",
+    "libwebpmux-*.dll",
+    "libopenjp2-*.dll",
+    "libpng*.dll",
+    "libsharpyuv-*.dll",
 )
 
 
@@ -54,6 +59,21 @@ def _copy_required(source: Path, destination: Path) -> None:
         raise FileNotFoundError(source)
     destination.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source, destination)
+
+
+def _copy_runtime_dependencies(install_dir: Path, runtime_dll_dir: Path, destination: Path) -> list[str]:
+    """Copy the exact, bounded DLL closure required by the built executable."""
+
+    source_bin = install_dir / "bin"
+    copied: set[str] = set()
+    for pattern in RUNTIME_DLL_PATTERNS:
+        matches = sorted(source_bin.glob(pattern)) + sorted(runtime_dll_dir.glob(pattern))
+        selected = next((path for path in matches if path.is_file() and path.name not in copied), None)
+        if selected is None:
+            raise FileNotFoundError(f"Missing required Windows runtime DLL matching {pattern}")
+        _copy_required(selected, destination / selected.name)
+        copied.add(selected.name)
+    return sorted(copied)
 
 
 def _file_records(component_root: Path) -> list[dict[str, object]]:
@@ -151,15 +171,11 @@ def main() -> int:
         component_root = Path(temporary) / "tesseract"
         bin_dir = component_root / "bin"
         _copy_required(args.install_dir / "bin" / "tesseract.exe", bin_dir / "tesseract.exe")
-        for name in RUNTIME_DLLS:
-            source = args.install_dir / "bin" / name
-            if not source.is_file():
-                source = args.runtime_dll_dir / name
-            _copy_required(source, bin_dir / name)
+        runtime_dlls = _copy_runtime_dependencies(args.install_dir, args.runtime_dll_dir, bin_dir)
         _copy_required(args.tessdata_dir / "eng.traineddata", component_root / "tessdata" / "eng.traineddata")
         _copy_required(args.tessdata_dir / "osd.traineddata", component_root / "tessdata" / "osd.traineddata")
         _write_notices(component_root, args.source_dir, args.tessdata_dir, version, args.source_commit, args.tessdata_commit)
-        _write_sbom(component_root, version, args.source_commit, args.tessdata_commit, list(RUNTIME_DLLS))
+        _write_sbom(component_root, version, args.source_commit, args.tessdata_commit, runtime_dlls)
         _write_component_manifest(component_root, version, args.source_tag, args.source_commit, args.tessdata_commit, archive_name)
         records = _file_records(component_root)
         (component_root / "SHA256SUMS.txt").write_text(
