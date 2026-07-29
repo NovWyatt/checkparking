@@ -63,6 +63,8 @@ jobs:
               exit $exitCode
             }
           }
+          .\.venv\Scripts\python.exe -B tools\validate_model_bundle.py --detection-dir models\paddleocr\PP-OCRv6_small_det --recognition-dir models\paddleocr\PP-OCRv6_small_rec --detection-model PP-OCRv6_small_det --recognition-model PP-OCRv6_small_rec
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           .\.venv\Scripts\python.exe -B tools\validate_tesseract_component.py --archive component-assets\CheckVehicleOCR-Tesseract-5.5.3-win-x64.zip --manifest component-assets\tesseract-component-manifest.json
       - name: Build portable executable and installer
         shell: pwsh
@@ -95,6 +97,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           body_path: docs/release-notes-v1.9.0.md
+          replacesArtifacts: true
           files: |
             release-assets/CheckVehicleOCR-Setup-*.exe
             release-assets/CheckVehicleOCR-Portable-*.zip

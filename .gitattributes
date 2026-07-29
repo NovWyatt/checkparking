@@ -1,0 +1,4 @@
+# Bundled OCR weights are Git LFS objects. Keep this project-level rule so
+# GitHub Actions checkout with `lfs: true` receives actual weights, never the
+# small pointer text files.
+models/paddleocr/**/inference.pdiparams filter=lfs diff=lfs merge=lfs -text
