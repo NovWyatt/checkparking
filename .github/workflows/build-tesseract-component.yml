@@ -18,6 +18,8 @@ jobs:
       TESSDATA_COMMIT: "65727574dfcd264acbb0c3e07860e4e9e9b22185"
     steps:
       - uses: actions/checkout@v4
+        with:
+          lfs: true
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
