@@ -84,6 +84,7 @@ jobs:
             "release-assets\CheckVehicleOCR-Setup-$version.exe",
             "release-assets\CheckVehicleOCR-Portable-$version.zip",
             'release-assets\CheckVehicleOCR-Tesseract-5.5.3-win-x64.zip',
+            "release-assets\CheckVehicleOCR-PP-OCRv6-small-model-$version.zip",
             'release-assets\tesseract-component-manifest.json',
             'release-assets\model-manifest.json',
             'release-assets\runtime-versions.json',
@@ -103,6 +104,7 @@ jobs:
             release-assets/CheckVehicleOCR-Portable-*.zip
             release-assets/CheckVehicleOCR-*-manifest.json
             release-assets/CheckVehicleOCR-Tesseract-*-win-x64.zip
+            release-assets/CheckVehicleOCR-PP-OCRv6-small-model-*.zip
             release-assets/tesseract-component-manifest.json
             release-assets/model-manifest.json
             release-assets/runtime-versions.json

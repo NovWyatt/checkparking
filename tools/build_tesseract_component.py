@@ -11,7 +11,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import shutil
+import subprocess
 import tempfile
 import zipfile
 from datetime import datetime, timezone
@@ -62,9 +64,22 @@ def _copy_required(source: Path, destination: Path) -> None:
 
 
 def _copy_runtime_dependencies(install_dir: Path, runtime_dll_dir: Path, destination: Path) -> list[str]:
-    """Copy the exact, bounded DLL closure required by the built executable."""
+    """Copy the exact DLL closure reported by the pinned UCRT64 objdump."""
 
     source_bin = install_dir / "bin"
+    objdump = runtime_dll_dir / "objdump.exe"
+    executable = source_bin / "tesseract.exe"
+    available = {path.name.lower(): path for root in (source_bin, runtime_dll_dir) for path in root.glob("*.dll") if path.is_file()}
+    if objdump.is_file() and executable.is_file():
+        closure = _resolve_pe_dll_closure(executable, objdump, available)
+        if closure:
+            for source in closure:
+                _copy_required(source, destination / source.name)
+            return sorted(path.name for path in closure)
+
+    # A bounded fallback remains for local environments without objdump.  The
+    # following GitHub release gate still starts the executable and will reject
+    # the package if a dependency is absent.
     copied: set[str] = set()
     for pattern in RUNTIME_DLL_PATTERNS:
         matches = sorted(source_bin.glob(pattern)) + sorted(runtime_dll_dir.glob(pattern))
@@ -74,6 +89,29 @@ def _copy_runtime_dependencies(install_dir: Path, runtime_dll_dir: Path, destina
         _copy_required(selected, destination / selected.name)
         copied.add(selected.name)
     return sorted(copied)
+
+
+def _resolve_pe_dll_closure(executable: Path, objdump: Path, available: dict[str, Path]) -> list[Path]:
+    pending = [executable]
+    copied: dict[str, Path] = {}
+    while pending:
+        current = pending.pop()
+        try:
+            output = subprocess.run([str(objdump), "-p", str(current)], capture_output=True, text=True, timeout=15, check=False).stdout
+        except OSError:
+            return []
+        if not output:
+            return []
+        for name in re.findall(r"DLL Name:\s*([^\r\n]+)", output, flags=re.IGNORECASE):
+            normalized = name.strip().lower()
+            if normalized.startswith(("api-ms-win-", "kernel", "user32", "gdi32", "advapi32", "shell32", "ole", "comdlg", "ucrtbase")):
+                continue
+            dependency = available.get(normalized)
+            if dependency is None or normalized in copied:
+                continue
+            copied[normalized] = dependency
+            pending.append(dependency)
+    return [copied[name] for name in sorted(copied)]
 
 
 def _file_records(component_root: Path) -> list[dict[str, object]]:

@@ -126,11 +126,21 @@ def test_release_asset_tool() -> None:
         assert (output / "SHA256SUMS.txt").is_file()
 
 
+def test_release_workflow_publishes_the_model_component() -> None:
+    """A model manifest must never point to an asset omitted from a release."""
+    workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+    required = '"release-assets\\CheckVehicleOCR-PP-OCRv6-small-model-$version.zip"'
+    upload = "release-assets/CheckVehicleOCR-PP-OCRv6-small-model-*.zip"
+    assert required in workflow
+    assert upload in workflow
+
+
 def main() -> int:
     test_version_and_model_manifest()
     test_checksum_fallback_and_pending_helper()
     test_model_registry_activation_and_rollback()
     test_release_asset_tool()
+    test_release_workflow_publishes_the_model_component()
     print("release_system_test OK")
     return 0
 

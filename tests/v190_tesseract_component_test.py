@@ -7,6 +7,7 @@ import sys
 import tempfile
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -21,6 +22,7 @@ from check_vehicle_ocr.update_center import (
     stage_local_tesseract_package,
     validate_tesseract_component,
 )
+from tools import build_tesseract_component
 
 
 def _component_package(*, corrupt_file: bool = False, zip_slip: bool = False) -> tuple[bytes, dict[str, object]]:
@@ -144,10 +146,45 @@ def test_archive_limit_and_manifest_policy() -> None:
             update_center.MAX_TESSERACT_ARCHIVE_BYTES = previous
 
 
+def test_component_builder_resolves_only_the_pe_dll_closure() -> None:
+    """Packaging follows objdump dependencies instead of a machine-wide PATH."""
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        executable = root / "tesseract.exe"
+        tesseract_dll = root / "libtesseract-5.dll"
+        leptonica_dll = root / "libleptonica-6.dll"
+        zlib_dll = root / "zlib1.dll"
+        for path in (executable, tesseract_dll, leptonica_dll, zlib_dll):
+            path.write_bytes(b"fixture")
+
+        graph = {
+            "tesseract.exe": "DLL Name: libtesseract-5.dll\nDLL Name: KERNEL32.dll\n",
+            "libtesseract-5.dll": "DLL Name: libleptonica-6.dll\n",
+            "libleptonica-6.dll": "DLL Name: zlib1.dll\n",
+            "zlib1.dll": "DLL Name: KERNEL32.dll\n",
+        }
+        original_run = build_tesseract_component.subprocess.run
+
+        def fake_run(command, **_kwargs):
+            return SimpleNamespace(stdout=graph[Path(command[-1]).name])
+
+        build_tesseract_component.subprocess.run = fake_run
+        try:
+            resolved = build_tesseract_component._resolve_pe_dll_closure(
+                executable,
+                root / "objdump.exe",
+                {path.name.lower(): path for path in (tesseract_dll, leptonica_dll, zlib_dll)},
+            )
+        finally:
+            build_tesseract_component.subprocess.run = original_run
+        assert [path.name for path in resolved] == ["libleptonica-6.dll", "libtesseract-5.dll", "zlib1.dll"]
+
+
 def main() -> int:
     test_manifest_and_atomic_install()
     test_corruption_zip_slip_and_interruption_cleanup()
     test_archive_limit_and_manifest_policy()
+    test_component_builder_resolves_only_the_pe_dll_closure()
     print("v190_tesseract_component_test OK")
     return 0
 
