@@ -277,6 +277,27 @@ def _test_legacy_disabled_update_source_migrates_without_overriding_an_explicit_
         os.environ["APPDATA"] = old_appdata
 
 
+def _test_ui_assertion_records_packaged_update_default() -> None:
+    old_appdata = os.environ.get("APPDATA")
+    with tempfile.TemporaryDirectory() as temporary:
+        os.environ["APPDATA"] = temporary
+        destination = Path(temporary) / "ui.json"
+        app = CheckVehicleApp()
+        try:
+            app.show_settings_section("updates")
+            app._write_ui_assertion(destination)
+            payload = json.loads(destination.read_text(encoding="utf-8"))
+            assert payload["update_source_mode"] == "github"
+            assert payload["github_repository"] == "NovWyatt/checkparking"
+            assert payload["update_primary_action"] == "Kiểm tra"
+        finally:
+            app.destroy()
+    if old_appdata is None:
+        os.environ.pop("APPDATA", None)
+    else:
+        os.environ["APPDATA"] = old_appdata
+
+
 def _test_combobox_states() -> None:
     old_appdata = os.environ.get("APPDATA")
     with tempfile.TemporaryDirectory() as temporary:
@@ -315,6 +336,7 @@ def main() -> int:
     _test_update_center_primary_actions()
     _test_packaged_github_default()
     _test_legacy_disabled_update_source_migrates_without_overriding_an_explicit_choice()
+    _test_ui_assertion_records_packaged_update_default()
     _test_combobox_states()
     print("update_actions_control_test OK")
     return 0

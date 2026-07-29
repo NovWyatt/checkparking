@@ -25,7 +25,15 @@ def main() -> int:
     with tempfile.TemporaryDirectory(prefix="check_vehicle_packaged_assert_") as temporary:
         root = Path(temporary)
         assertion = root / "ui.json"
-        env = {**os.environ, "APPDATA": str(root), "LOCALAPPDATA": str(root), "TEMP": str(root), "TMP": str(root), "CHECK_VEHICLE_UI_ASSERT_PATH": str(assertion)}
+        env = {
+            **os.environ,
+            "APPDATA": str(root),
+            "LOCALAPPDATA": str(root),
+            "TEMP": str(root),
+            "TMP": str(root),
+            "CHECK_VEHICLE_UI_ASSERT_PATH": str(assertion),
+            "CHECK_VEHICLE_UI_REVIEW_PAGE": "updates",
+        }
         process = subprocess.Popen([str(executable)], cwd=str(executable.parent), env=env)
         try:
             deadline = time.monotonic() + 30
@@ -37,6 +45,9 @@ def main() -> int:
             assert payload["version"] == args.version
             assert payload["plate_type_label"] == "Loại biển số"
             assert payload["plate_type_values"] == ["Xe máy", "Ô tô", "Không tự định dạng"]
+            assert payload["update_source_mode"] == "github"
+            assert payload["github_repository"] == "NovWyatt/checkparking"
+            assert payload["update_primary_action"] == "Kiểm tra"
         finally:
             process.terminate()
             try:

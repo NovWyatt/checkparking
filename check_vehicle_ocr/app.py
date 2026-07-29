@@ -534,7 +534,14 @@ class CheckVehicleApp(tk.Tk):
             scan = self.shell.pages.get("scan")
             combo = getattr(scan, "plate_type_combo", None)
             values = list(combo.cget("values")) if combo is not None else []
-            payload = {"version": __version__, "plate_type_label": "Loại biển số", "plate_type_values": values}
+            payload = {
+                "version": __version__,
+                "plate_type_label": "Loại biển số",
+                "plate_type_values": values,
+                "update_source_mode": self._update_source_mode_key(),
+                "github_repository": self.github_repository_var.get().strip(),
+                "update_primary_action": self.update_check_button.cget("text") if self.update_check_button else "",
+            }
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
         except OSError:
