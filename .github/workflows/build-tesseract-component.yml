@@ -67,10 +67,13 @@ jobs:
           cmake --install .runtime/tesseract-build
           .runtime/tesseract-install/bin/tesseract.exe --version | grep -F "tesseract $TESSERACT_TAG"
           ldd .runtime/tesseract-install/bin/tesseract.exe
-      - name: Package, hash and smoke-test component
+      - name: Package and hash component
         shell: pwsh
         run: |
           python tools\build_tesseract_component.py --install-dir .runtime\tesseract-install --runtime-dll-dir C:\msys64\ucrt64\bin --source-dir .runtime\tesseract-source --tessdata-dir .runtime\tessdata-fast --output-dir component-assets --version $env:TESSERACT_TAG --source-tag $env:TESSERACT_TAG --source-commit $env:TESSERACT_COMMIT --tessdata-commit $env:TESSDATA_COMMIT --repository NovWyatt/checkparking --tag "${{ github.ref_name }}"
+      - name: Validate component hash and OCR smoke
+        shell: pwsh
+        run: |
           python tools\validate_tesseract_component.py --archive component-assets\CheckVehicleOCR-Tesseract-$env:TESSERACT_TAG-win-x64.zip --manifest component-assets\tesseract-component-manifest.json
       - uses: actions/upload-artifact@v4
         with:
