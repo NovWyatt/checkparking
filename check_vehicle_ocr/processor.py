@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import hashlib
+import time
 from pathlib import Path
 
 import cv2
@@ -13,6 +14,66 @@ from .ocr import TesseractOcrEngine, is_timestamp_like, looks_like_plate, plate_
 from .plate_detector import detect_plate_candidates_onnx, onnx_detector_error
 from .plate_formatting import PlateFormatStatus, PlateType, coerce_plate_type
 from .plate_selection import assess_plate_candidate, choose_primary_candidates
+
+
+_STAGE_TIMING_KEYS = (
+    "file_read_ms",
+    "exif_ms",
+    "decode_ms",
+    "resize_ms",
+    "detector_ms",
+    "detector_postprocess_ms",
+    "crop_ms",
+    "paddle_det_ms",
+    "paddle_rec_ms",
+    "paddle_total_ms",
+    "formatting_ms",
+    "tesseract_ms",
+    "candidate_filter_ms",
+    "scoring_ms",
+    "thumbnail_ms",
+    "result_event_ms",
+    "ui_render_ms",
+    "total_ms",
+)
+
+_FAST_BALANCED_LONGEST_EDGE = 1280
+
+
+def _prepare_stage_timings(stage_timings: dict[str, float] | None) -> None:
+    if stage_timings is None:
+        return
+    for key in _STAGE_TIMING_KEYS:
+        stage_timings.setdefault(key, 0.0)
+
+
+def _record_stage_ms(stage_timings: dict[str, float] | None, key: str, started_at: float) -> None:
+    if stage_timings is not None:
+        stage_timings[key] = stage_timings.get(key, 0.0) + (time.perf_counter() - started_at) * 1000
+
+
+def _restore_result_geometry(
+    result: ImageResult,
+    *,
+    original_size: tuple[int, int],
+    inverse_scale: float,
+) -> None:
+    if inverse_scale == 1.0:
+        return
+    original_width, original_height = original_size
+    result.width = original_width
+    result.height = original_height
+    seen: set[int] = set()
+    for candidate in [*result.plates, *result.rejected_candidates]:
+        if id(candidate) in seen:
+            continue
+        seen.add(id(candidate))
+        x, y, width, height = candidate.bbox
+        left = max(0, min(original_width - 1, round(x * inverse_scale)))
+        top = max(0, min(original_height - 1, round(y * inverse_scale)))
+        right = max(left + 1, min(original_width, round((x + width) * inverse_scale)))
+        bottom = max(top + 1, min(original_height, round((y + height) * inverse_scale)))
+        candidate.bbox = (left, top, right - left, bottom - top)
 
 
 def blur_score(image_bgr: np.ndarray) -> float:
@@ -930,6 +991,7 @@ def process_image(
     image_size: tuple[int, int] | None = None,
     selected_plate_type: PlateType | str | None = PlateType.NONE,
     expected_plate_count: ExpectedPlateCount | str | None = ExpectedPlateCount.ONE,
+    stage_timings: dict[str, float] | None = None,
 ) -> ImageResult:
     """Run the bounded detector-first local OCR pipeline.
 
@@ -940,11 +1002,22 @@ def process_image(
     is found.  A full-scene Paddle pass is a single, bounded fallback only.
     """
 
+    pipeline_started = time.perf_counter()
+    _prepare_stage_timings(stage_timings)
+    original_size = (0, 0)
+    inverse_working_scale = 1.0
+
+    def finish(result: ImageResult) -> ImageResult:
+        _restore_result_geometry(result, original_size=original_size, inverse_scale=inverse_working_scale)
+        if stage_timings is not None:
+            stage_timings["total_ms"] = (time.perf_counter() - pipeline_started) * 1000
+        return result
+
     if image_bgr is None:
         try:
-            image_bgr, (width, height) = load_image(image_path)
+            image_bgr, (width, height) = load_image(image_path, stage_timings=stage_timings)
         except Exception as exc:
-            return ImageResult(image_path=image_path, status="ERROR", reason="Không đọc được file ảnh", error=str(exc))
+            return finish(ImageResult(image_path=image_path, status="ERROR", reason="Không đọc được file ảnh", error=str(exc)))
     elif image_size is None:
         height, width = image_bgr.shape[:2]
     else:
@@ -953,6 +1026,15 @@ def process_image(
     selected_type = coerce_plate_type(selected_plate_type)
     expected_count = coerce_expected_plate_count(expected_plate_count)
     scan_mode = _normalize_paddle_scan_mode(paddle_scan_mode)
+    original_size = (width, height)
+    if scan_mode in {"fast", "balanced"} and max(width, height) > _FAST_BALANCED_LONGEST_EDGE:
+        resize_started = time.perf_counter()
+        working_scale = _FAST_BALANCED_LONGEST_EDGE / max(width, height)
+        width = max(1, round(width * working_scale))
+        height = max(1, round(height * working_scale))
+        image_bgr = cv2.resize(image_bgr, (width, height), interpolation=cv2.INTER_AREA)
+        inverse_working_scale = 1.0 / working_scale
+        _record_stage_ms(stage_timings, "resize_ms", resize_started)
     sharpness = blur_score(image_bgr)
     warnings = [f"Ảnh mờ, blur={sharpness:.1f} < {blur_threshold:.1f}"] if sharpness < blur_threshold else []
     metrics: dict[str, int | float | str] = {
@@ -968,7 +1050,7 @@ def process_image(
     rejected: list[PlateCandidate] = []
     accepted: list[PlateCandidate] = []
 
-    detector_candidates = _detector_first_regions(image_bgr, scan_mode, metrics)
+    detector_candidates = _detector_first_regions(image_bgr, scan_mode, metrics, stage_timings=stage_timings)
     crop_limit = 2 if scan_mode == "fast" else (3 if scan_mode == "balanced" else 6)
     region_reader = getattr(ocr_engine, "read_plate_regions", None)
     variant_reader = getattr(ocr_engine, "read_plate_variants", None)
@@ -998,7 +1080,9 @@ def process_image(
             detector_confidence=detector_candidate.detector_confidence or detector_candidate.score,
             selected_engine=attempt.engine or "paddleocr",
         )
+        filter_started = time.perf_counter()
         assessment = assess_plate_candidate(candidate, plate_type=selected_type, image_size=(width, height))
+        _record_stage_ms(stage_timings, "candidate_filter_ms", filter_started)
         candidate.cleaned_text = assessment.cleaned_text
         candidate.normalized_text = assessment.cleaned_text
         candidate.selection_score = assessment.score
@@ -1014,7 +1098,9 @@ def process_image(
             return candidate
 
         candidate.ocr_needs_review = bool(candidate.ambiguity_flags)
+        formatting_started = time.perf_counter()
         decision = candidate.apply_plate_formatting(selected_type)
+        _record_stage_ms(stage_timings, "formatting_ms", formatting_started)
         candidate.candidate_status = decision.format_status.value
         candidate.needs_review = bool(
             candidate.ambiguity_flags
@@ -1035,15 +1121,21 @@ def process_image(
 
     for index, detector_candidate in enumerate(detector_candidates[:crop_limit], start=1):
         x, y, box_width, box_height = detector_candidate.bbox
+        crop_started = time.perf_counter()
         crop = image_bgr[y : y + box_height, x : x + box_width]
         if crop.size == 0:
+            _record_stage_ms(stage_timings, "crop_ms", crop_started)
             continue
         crop_path = crop_dir / f"{_safe_stem(image_path.stem)}_{_path_hash(image_path)}_{index:02d}_detector.jpg"
         save_crop(crop, crop_path)
+        _record_stage_ms(stage_timings, "crop_ms", crop_started)
         crop_accepted: list[PlateCandidate] = []
         if can_read_regions:
             metrics["crop_ocr_calls"] = int(metrics["crop_ocr_calls"]) + 1
-            for _local_bbox, attempt in region_reader(crop) or []:
+            paddle_started = time.perf_counter()
+            region_attempts = region_reader(crop) or []
+            _record_stage_ms(stage_timings, "paddle_total_ms", paddle_started)
+            for _local_bbox, attempt in region_attempts:
                 candidate = record_attempt(
                     detector_candidate,
                     attempt,
@@ -1057,7 +1149,9 @@ def process_image(
             metrics["crop_ocr_calls"] = int(metrics["crop_ocr_calls"]) + 1
             if not can_read_regions:
                 metrics["tesseract_calls"] = int(metrics["tesseract_calls"]) + 1
+            fallback_started = time.perf_counter()
             attempt = variant_reader(crop) if callable(variant_reader) else single_reader(crop)
+            _record_stage_ms(stage_timings, "paddle_total_ms" if can_read_regions else "tesseract_ms", fallback_started)
             candidate = record_attempt(
                 detector_candidate,
                 attempt,
@@ -1081,7 +1175,10 @@ def process_image(
     if not has_sufficient_crop_candidate and can_read_regions and scan_mode != "fast":
         metrics["full_scene_ocr_calls"] = int(metrics["full_scene_ocr_calls"]) + 1
         full_scene = PlateCandidate(bbox=(0, 0, width, height), score=0.0, source="full_scene_fallback")
-        for local_bbox, attempt in region_reader(image_bgr) or []:
+        paddle_started = time.perf_counter()
+        full_scene_attempts = region_reader(image_bgr) or []
+        _record_stage_ms(stage_timings, "paddle_total_ms", paddle_started)
+        for local_bbox, attempt in full_scene_attempts:
             lx, ly, lw, lh = local_bbox
             record_attempt(
                 full_scene,
@@ -1090,10 +1187,12 @@ def process_image(
                 bbox=(max(0, lx), max(0, ly), max(1, lw), max(1, lh)),
             )
 
+    scoring_started = time.perf_counter()
     primary, discarded, selected_reason = choose_primary_candidates(
         accepted,
         allow_multiple=expected_count is ExpectedPlateCount.MULTIPLE,
     )
+    _record_stage_ms(stage_timings, "scoring_ms", scoring_started)
     for candidate in discarded:
         candidate.candidate_status = "NOT_SELECTED"
         candidate.rejected_reason = "Candidate yếu hơn hoặc không thuộc một vùng biển vật lý riêng."
@@ -1104,7 +1203,7 @@ def process_image(
     if primary:
         for candidate in primary:
             candidate.selection_reason = selected_reason if candidate is primary[0] else candidate.selection_reason
-        return ImageResult(
+        return finish(ImageResult(
             image_path=image_path,
             status="OK",
             reason="Đã nhận diện biển số từ vùng detector.",
@@ -1119,11 +1218,11 @@ def process_image(
             rejected_candidates=rejected,
             pipeline_metrics=metrics,
             selected_candidate_reason=selected_reason,
-        )
+        ))
 
     status = "BLURRY" if sharpness < blur_threshold else "UNREADABLE"
     reason = "Ảnh mờ và không đọc được biển số." if status == "BLURRY" else "Không có candidate biển số hợp lệ sau detector-first OCR."
-    return ImageResult(
+    return finish(ImageResult(
         image_path=image_path,
         status=status,
         reason=reason,
@@ -1137,37 +1236,48 @@ def process_image(
         rejected_candidates=rejected,
         pipeline_metrics=metrics,
         selected_candidate_reason=selected_reason,
-    )
+    ))
 
 
 def _detector_first_regions(
     image_bgr: np.ndarray,
     scan_mode: str,
     metrics: dict[str, int | float | str],
+    *,
+    stage_timings: dict[str, float] | None = None,
 ) -> list[PlateCandidate]:
     """Return only physical plate regions, sorted and de-duplicated."""
 
     metrics["detector_calls"] = int(metrics["detector_calls"]) + 1
+    detector_started = time.perf_counter()
     onnx = detect_plate_candidates_onnx(
         image_bgr,
         max_candidates=_onnx_detector_limit(scan_mode),
         confidence_threshold=_onnx_detector_confidence(scan_mode),
     )
+    _record_stage_ms(stage_timings, "detector_ms", detector_started)
     if onnx:
         for candidate in onnx:
             candidate.detector_confidence = candidate.score
-        return _non_max_suppression(onnx, _onnx_detector_limit(scan_mode))
+        postprocess_started = time.perf_counter()
+        selected = _non_max_suppression(onnx, _onnx_detector_limit(scan_mode))
+        _record_stage_ms(stage_timings, "detector_postprocess_ms", postprocess_started)
+        return selected
 
     # The classical detector is offline and bounded.  It is used only when the
     # ONNX plate detector is unavailable or returns no physical plate region.
     metrics["detector_calls"] = int(metrics["detector_calls"]) + 3
+    detector_started = time.perf_counter()
     classical = [
         *detect_plate_candidates(image_bgr, max_candidates=4),
         *detect_plate_candidates_second_pass(image_bgr, max_candidates=4),
         *detect_plate_outline_candidates(image_bgr, max_candidates=3),
     ]
+    _record_stage_ms(stage_timings, "detector_ms", detector_started)
     limit = 2 if scan_mode == "fast" else (3 if scan_mode == "balanced" else 6)
+    postprocess_started = time.perf_counter()
     regions = _non_max_suppression(sorted(classical, key=lambda item: item.score, reverse=True), limit)
+    _record_stage_ms(stage_timings, "detector_postprocess_ms", postprocess_started)
     for candidate in regions:
         candidate.detector_confidence = candidate.score
         candidate.source = f"classical_plate_detector:{candidate.source}"
