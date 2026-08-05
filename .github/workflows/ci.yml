@@ -38,6 +38,8 @@ jobs:
         run: .\.venv\Scripts\python.exe -B tests\dataset_benchmark_test.py
       - name: Performance stability test
         run: .\.venv\Scripts\python.exe -B tests\performance_stability_test.py
+      - name: High-resolution performance invariants
+        run: .\.venv\Scripts\python.exe -B tests\performance_timing_instrumentation_test.py
       - name: Progress-state test
         run: .\.venv\Scripts\python.exe -B tests\progress_state_test.py
       - name: Services test

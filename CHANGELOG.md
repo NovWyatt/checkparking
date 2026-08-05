@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.9.2 — Tăng tốc ảnh độ phân giải cao
+
+- FAST và Cân bằng giới hạn ảnh làm việc ở cạnh dài 1280 trước detector/OCR để giảm chi phí trên ảnh điện thoại độ phân giải cao.
+- Kích thước ảnh và bbox trong kết quả vẫn dùng tọa độ ảnh gốc; crop, formatter, one-plate-per-image và bộ lọc nhiễu được giữ nguyên.
+- PP-OCRv6 Small tiếp tục là model mặc định; chế độ Quét kỹ không thay đổi hành vi.
+- Thêm regression guard không phụ thuộc tốc độ máy để khóa kích thước ảnh làm việc, số lần OCR, early exit, output định dạng và phép ánh xạ bbox.
+
 ## 1.9.1 — Sửa nhận nhầm chữ trên ảnh thành biển số
 
 - Mặc định mỗi ảnh chỉ xuất một biển số primary; lựa chọn nhiều biển chỉ giữ các vùng biển vật lý khác nhau do detector tìm thấy.

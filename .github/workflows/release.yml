@@ -49,7 +49,8 @@ jobs:
           $tests = @(
             'tests\release_system_test.py', 'tests\update_actions_control_test.py',
             'tests\plate_formatting_test.py', 'tests\hybrid_progress_policy_test.py',
-            'tests\hybrid_pipeline_test.py', 'tests\false_positive_regression_test.py', 'tests\release_v180_test.py',
+            'tests\hybrid_pipeline_test.py', 'tests\false_positive_regression_test.py',
+            'tests\performance_timing_instrumentation_test.py', 'tests\release_v180_test.py',
             'tests\scrollable_frame_test.py', 'tests\v190_tesseract_component_test.py',
             'tests\v190_candidate_scoring_test.py', 'tests\v190_runtime_version_test.py'
           )
