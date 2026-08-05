@@ -9,9 +9,44 @@ claims to be an official release.
 import argparse
 from datetime import datetime, timezone
 from pathlib import Path
+import re
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def windows_version_info(version: str) -> str:
+    if not re.fullmatch(r"\d+\.\d+\.\d+", version):
+        raise ValueError(f"Invalid release version: {version}")
+    major, minor, patch = (int(part) for part in version.split("."))
+    numeric = f"({major}, {minor}, {patch}, 0)"
+    return f"""VSVersionInfo(
+  ffi=FixedFileInfo(
+    filevers={numeric},
+    prodvers={numeric},
+    mask=0x3f,
+    flags=0x0,
+    OS=0x40004,
+    fileType=0x1,
+    subtype=0x0,
+    date=(0, 0)
+  ),
+  kids=[
+    StringFileInfo([
+      StringTable('040904B0', [
+        StringStruct('CompanyName', 'Check Vehicle OCR'),
+        StringStruct('FileDescription', 'Check Vehicle OCR'),
+        StringStruct('FileVersion', '{version}.0'),
+        StringStruct('InternalName', 'CheckVehicleOCR'),
+        StringStruct('OriginalFilename', 'CheckVehicleOCR.exe'),
+        StringStruct('ProductName', 'Check Vehicle OCR'),
+        StringStruct('ProductVersion', '{version}.0')
+      ])
+    ]),
+    VarFileInfo([VarStruct('Translation', [1033, 1200])])
+  ]
+)
+"""
 
 
 def main() -> int:
@@ -19,6 +54,7 @@ def main() -> int:
     parser.add_argument("--commit", default="local")
     parser.add_argument("--repository", default="")
     parser.add_argument("--date", default="")
+    parser.add_argument("--version", default="")
     args = parser.parse_args()
     build_date = args.date.strip() or datetime.now(timezone.utc).replace(microsecond=0).isoformat()
     destination = ROOT / "check_vehicle_ocr" / "_build_meta.py"
@@ -29,6 +65,11 @@ def main() -> int:
         f"GITHUB_REPOSITORY = {args.repository.strip()!r}\n",
         encoding="utf-8",
     )
+    if args.version:
+        version_destination = ROOT / "build" / "windows-version-info.txt"
+        version_destination.parent.mkdir(parents=True, exist_ok=True)
+        version_destination.write_text(windows_version_info(args.version.strip()), encoding="utf-8")
+        print(version_destination)
     print(destination)
     return 0
 

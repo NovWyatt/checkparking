@@ -51,6 +51,7 @@ if model_manifest.is_file():
 runtime_versions = project_root / "build" / "runtime-versions.json"
 if runtime_versions.is_file():
     datas.append((str(runtime_versions), "build"))
+windows_version_info = project_root / "build" / "windows-version-info.txt"
 icons_dir = project_root / "assets" / "icons"
 if icons_dir.is_dir():
     datas.append((str(icons_dir), "assets/icons"))
@@ -142,6 +143,7 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon=str(project_root / "assets" / "icons" / "app-icon.ico"),
+    version=str(windows_version_info) if windows_version_info.is_file() else None,
 )
 
 coll = COLLECT(

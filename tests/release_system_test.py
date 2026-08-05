@@ -26,6 +26,7 @@ from check_vehicle_ocr.updater import (
 )
 from check_vehicle_ocr.version import VERSION
 from check_vehicle_ocr.model_registry import ModelRuntimeManager
+from tools.write_build_metadata import windows_version_info
 
 
 class Response(io.BytesIO):
@@ -144,6 +145,16 @@ def test_pyinstaller_model_bundle_excludes_local_cache() -> None:
     assert '"inference.pdiparams"' in spec
 
 
+def test_windows_executable_version_resource() -> None:
+    resource = windows_version_info(VERSION)
+    numeric = tuple(int(part) for part in VERSION.split(".")) + (0,)
+    assert f"filevers={numeric}" in resource
+    assert f"prodvers={numeric}" in resource
+    assert f"StringStruct('ProductVersion', '{VERSION}.0')" in resource
+    spec = (ROOT / "CheckVehicleOCR.spec").read_text(encoding="utf-8")
+    assert "windows-version-info.txt" in spec and "version=str(windows_version_info)" in spec
+
+
 def main() -> int:
     test_version_and_model_manifest()
     test_checksum_fallback_and_pending_helper()
@@ -151,6 +162,7 @@ def main() -> int:
     test_release_asset_tool()
     test_release_workflow_publishes_the_model_component()
     test_pyinstaller_model_bundle_excludes_local_cache()
+    test_windows_executable_version_resource()
     print("release_system_test OK")
     return 0
 

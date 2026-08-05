@@ -30,7 +30,7 @@ $Commit = (& git -C $Root rev-parse HEAD).Trim()
 $Remote = (& git -C $Root remote get-url origin).Trim()
 $Repository = ""
 if ($Remote -match "github\.com[:/]([^/]+)/([^/]+?)(?:\.git)?$") { $Repository = "$($Matches[1])/$($Matches[2])" }
-& $Python (Join-Path $Root "tools\write_build_metadata.py") --commit $Commit --repository $Repository
+& $Python (Join-Path $Root "tools\write_build_metadata.py") --commit $Commit --repository $Repository --version $Version
 if ($LASTEXITCODE -ne 0) { throw "Không tạo được build metadata." }
 
 & $Python (Join-Path $Root "tools\write_runtime_versions.py") --output (Join-Path $Root "build\runtime-versions.json") --commit $Commit
