@@ -20,6 +20,12 @@ paddleocr_model_names = (
     "PP-OCRv5_mobile_det",
     "en_PP-OCRv5_mobile_rec",
 )
+paddleocr_model_runtime_files = (
+    "config.json",
+    "inference.json",
+    "inference.pdiparams",
+    "inference.yml",
+)
 binaries = [(str(dll), "paddle/libs") for dll in paddle_libs.glob("*.dll")]
 
 
@@ -53,8 +59,10 @@ if tesseract_assets.is_dir():
     datas.append((str(tesseract_assets), "assets/tesseract"))
 for model_name in paddleocr_model_names:
     model_dir = project_root / "models" / "paddleocr" / model_name
-    if model_dir.exists():
-        datas.append((str(model_dir), f"models/paddleocr/{model_name}"))
+    for runtime_file_name in paddleocr_model_runtime_files:
+        runtime_file = model_dir / runtime_file_name
+        if runtime_file.is_file():
+            datas.append((str(runtime_file), f"models/paddleocr/{model_name}"))
 for detector_model_path in (
     Path.home()
     / "AppData"

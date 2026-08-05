@@ -137,12 +137,20 @@ def test_release_workflow_publishes_the_model_component() -> None:
     assert "replacesArtifacts" not in workflow
 
 
+def test_pyinstaller_model_bundle_excludes_local_cache() -> None:
+    spec = (ROOT / "CheckVehicleOCR.spec").read_text(encoding="utf-8")
+    assert "paddleocr_model_runtime_files" in spec
+    assert "datas.append((str(model_dir)" not in spec
+    assert '"inference.pdiparams"' in spec
+
+
 def main() -> int:
     test_version_and_model_manifest()
     test_checksum_fallback_and_pending_helper()
     test_model_registry_activation_and_rollback()
     test_release_asset_tool()
     test_release_workflow_publishes_the_model_component()
+    test_pyinstaller_model_bundle_excludes_local_cache()
     print("release_system_test OK")
     return 0
 
