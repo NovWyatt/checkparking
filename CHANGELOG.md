@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.9.3 — Giao diện mượt hơn khi quét
+
+- Tách công việc nhận diện khỏi giao diện để giảm hiện tượng đứng hoặc khựng trong lúc PP-OCRv6 Small xử lý ảnh.
+- Giữ nguyên PP-OCRv6 Small, detector, chính sách resize FAST/Cân bằng và kết quả regression OCR.
+- Giới hạn một lần tự khởi động lại công cụ nhận diện cho mỗi batch; nếu không phục hồi được, app dừng an toàn và giữ kết quả đã hoàn thành.
+- Bổ sung kiểm tra heartbeat, startup/shutdown, thứ tự kết quả, cancel, crash/restart và không để lại tiến trình sau khi đóng app.
+
 ## 1.9.2 — Tăng tốc ảnh độ phân giải cao
 
 - FAST và Cân bằng giới hạn ảnh làm việc ở cạnh dài 1280 trước detector/OCR để giảm chi phí trên ảnh điện thoại độ phân giải cao.

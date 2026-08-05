@@ -77,3 +77,24 @@ def profile_for_models(detection_model: str, recognition_model: str) -> OcrModel
 def profile_by_id(profile_id: str | None) -> OcrModelProfile | None:
     candidate = str(profile_id or "").strip().lower()
     return next((profile for profile in MODEL_PROFILES if profile.profile_id == candidate), None)
+
+
+def current_model_selection() -> tuple[str, str]:
+    """Resolve the active pair without importing PaddleOCR into the UI process."""
+
+    try:
+        from .model_registry import ModelRuntimeManager
+
+        selected = ModelRuntimeManager().active_model_selection()
+        if selected:
+            return selected
+    except Exception:
+        pass
+    try:
+        from .config import load_settings
+
+        if str(load_settings().get("performance_preset") or "").upper() == "LOW_MEMORY":
+            return PP_OCRV6_TINY.detection_model, PP_OCRV6_TINY.recognition_model
+    except Exception:
+        pass
+    return DEFAULT_MODEL_PROFILE.detection_model, DEFAULT_MODEL_PROFILE.recognition_model

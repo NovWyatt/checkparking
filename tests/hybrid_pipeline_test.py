@@ -17,6 +17,7 @@ from check_vehicle_ocr.app import CheckVehicleApp
 from check_vehicle_ocr.models import BatchSession, ImageResult, PlateCandidate
 from check_vehicle_ocr.plate_formatting import PlateType
 from check_vehicle_ocr.services.progress_service import BatchStatus
+from check_vehicle_ocr.services.ocr_process import OcrProcessOutcome
 from check_vehicle_ocr.services.worker_manager import WorkerSettings
 
 
@@ -46,6 +47,18 @@ class Online:
         return ImageResult(path, "OK", "", plates=[plate("59X112345")])
 
 
+class LocalProcess:
+    init_count = 1
+
+    def __init__(self) -> None:
+        self.tasks = []
+
+    def process(self, task, *, timeout: float = 300.0) -> OcrProcessOutcome:
+        del timeout
+        self.tasks.append(task)
+        return OcrProcessOutcome(task.request_id, local_result(task.image_path), 1.0)
+
+
 def main() -> int:
     previous_appdata = os.environ.get("APPDATA")
     with tempfile.TemporaryDirectory() as temporary:
@@ -54,10 +67,15 @@ def main() -> int:
         try:
             app.ai_review_policy_var.set("Khi kết quả cần kiểm tra — Khuyên dùng")
             paths = [Path(temporary) / name for name in ("clear.jpg", "special.jpg", "unreadable.jpg")]
+            for path in paths:
+                path.write_bytes(b"fixture")
             online = Online()
+            local_process = LocalProcess()
             engine = SimpleNamespace(local_engine=object(), online_engine=online)
             session = BatchSession("batch", PlateType.MOTORCYCLE, "2026-07-29T00:00:00+07:00", len(paths))
-            with patch("check_vehicle_ocr.app.load_image", return_value=(None, (1, 1))), patch("check_vehicle_ocr.app.process_image", side_effect=lambda image, *_args, **_kwargs: local_result(image)):
+            with patch("check_vehicle_ocr.app.load_image", side_effect=AssertionError("Hybrid Paddle must read paths in the OCR process")), patch(
+                "check_vehicle_ocr.app.process_image", side_effect=AssertionError("Hybrid Paddle must not infer in the UI process")
+            ):
                 app._run_hybrid_pipeline(
                     images=paths,
                     engine=engine,
@@ -69,7 +87,9 @@ def main() -> int:
                     paddle_scan_mode="Cân bằng — Khuyên dùng",
                     retry_failed=False,
                     batch_session=session,
+                    ocr_process_client=local_process,
                 )
+            assert len(local_process.tasks) == 3 and local_process.init_count == 1
             assert [path.name for path in online.calls] == ["special.jpg", "unreadable.jpg"], [path.name for path in online.calls]
             assert app.batch_progress is not None
             snapshot = app.batch_progress.snapshot()

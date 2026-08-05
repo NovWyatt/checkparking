@@ -10,7 +10,7 @@ import cv2
 import numpy as np
 
 from .models import OcrAttempt
-from .ocr_models import DEFAULT_MODEL_PROFILE, PP_OCRV6_TINY
+from .ocr_models import DEFAULT_MODEL_PROFILE, current_model_selection as _current_model_selection
 from .ocr import format_vietnam_plate, is_timestamp_like, looks_like_plate, normalize_plate_text, plate_quality_score
 from .plate_selection import is_plate_like_candidate
 
@@ -194,28 +194,13 @@ def _create_ocr(model_dirs: dict[str, str], detection_model: str = _TEXT_DETECTI
 def _selected_model_names() -> tuple[str, str]:
     """Use only an accepted explicit selection; otherwise use v6 Small."""
 
-    try:
-        from .model_registry import ModelRuntimeManager
-
-        selected = ModelRuntimeManager().active_model_selection()
-        if selected:
-            return selected
-    except Exception:
-        pass
-    try:
-        from .config import load_settings
-
-        if str(load_settings().get("performance_preset") or "").upper() == "LOW_MEMORY":
-            return PP_OCRV6_TINY.detection_model, PP_OCRV6_TINY.recognition_model
-    except Exception:
-        pass
-    return _TEXT_DETECTION_MODEL_NAME, _TEXT_RECOGNITION_MODEL_NAME
+    return _current_model_selection()
 
 
 def current_model_selection() -> tuple[str, str]:
     """Public, side-effect-free runtime model selection for status screens."""
 
-    return _selected_model_names()
+    return _current_model_selection()
 
 
 def _bundled_model_dirs(

@@ -5,6 +5,7 @@ import tempfile
 import traceback
 import os
 import subprocess
+import multiprocessing as mp
 from pathlib import Path
 
 
@@ -116,6 +117,9 @@ def _write_self_test_log(message: str) -> None:
 
 
 def main() -> None:
+    # Required by Windows spawn and frozen PyInstaller executables.  This must
+    # run before importing the Tk application to avoid recursive GUI children.
+    mp.freeze_support()
     _recover_interrupted_app_update()
     _launch_active_runtime_if_needed()
     if "--runtime-health-check" in sys.argv:

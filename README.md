@@ -12,7 +12,8 @@ Tool desktop Python de import hang loat anh xe, nhan dien bien so bang OCR va xu
   - `Plate Recognizer`: API chuyen doc bien so xe, mac dinh region `vn`, nen uu tien cho bai toan bai xe/nhieu xe.
   - `GPT Vision`: gui anh da resize/nen len OpenAI de doc bien so.
   - `Local OCR`: xu ly local bang OpenCV + Tesseract, dung khi khong co API key.
-- `PaddleOCR Local` trong bản phát hành 1.9.2 dùng PP-OCRv6 Small đã bundle; chế độ tiết kiệm tài nguyên dùng PP-OCRv6 Tiny. PP-OCRv5 Mobile vẫn được giữ trong registry để quay lại khi cần.
+- `PaddleOCR Local` trong bản phát hành 1.9.3 dùng PP-OCRv6 Small đã bundle; chế độ tiết kiệm tài nguyên dùng PP-OCRv6 Tiny. PP-OCRv5 Mobile vẫn được giữ trong registry để quay lại khi cần.
+- Từ bản 1.9.3, công cụ nhận diện chạy tách biệt khỏi giao diện để giảm hiện tượng đứng hoặc khựng trong lúc quét; detector, model và kết quả OCR vẫn giữ nguyên theo regression benchmark.
 - `PaddleOCR Local` co them ONNX license-plate detector `yolo-v9-t-384-license-plate-end2end` de tim dung box bien so truoc khi OCR; model nhe, chay CPU local, giup anh nhieu xe it sot bien hon ma khong phu thuoc API.
 - Khi dùng PaddleOCR, ứng dụng ưu tiên detector vùng biển trước OCR. Mặc định batch xuất một biển số tốt nhất mỗi ảnh; chỉ chế độ nhiều biển mới giữ các bbox biển vật lý riêng biệt.
 - Pipeline PaddleOCR ưu tiên tốc độ và tránh text overlay: `Nhanh` OCR tối đa hai crop detector, `Cân bằng` tối đa ba crop và chỉ fallback khi crop không tạo candidate hợp lệ; hai chế độ này giới hạn ảnh làm việc ở cạnh dài 1280 nhưng vẫn giữ kích thước và bbox theo ảnh gốc. `Kỹ` không áp dụng giới hạn này và được thử thêm fallback có giới hạn.

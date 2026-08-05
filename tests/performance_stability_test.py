@@ -21,6 +21,7 @@ from check_vehicle_ocr.excel_export import ExcelExportError, export_results
 from check_vehicle_ocr.models import ImageResult, OcrAttempt, PlateCandidate
 from check_vehicle_ocr.ocr import normalize_plate_text, plate_text_metadata
 from check_vehicle_ocr.processor import process_image
+from check_vehicle_ocr.services.ocr_process import OcrProcessOutcome, OcrProcessStartupError
 
 
 def _image(path: Path) -> None:
@@ -45,17 +46,26 @@ class RegionEngine:
         return self.read_plate_regions_batch([crop])[0]
 
 
-class ReusableEngine:
-    available = True
-    reason = ""
+class ReusableProcessClient:
+    init_count = 1
 
-    def read_plate(self, _crop):
-        return OcrAttempt(text="30A-123.45", normalized_text="30A12345", confidence=95, raw_text="30A-123.45")
+    def __init__(self, *, unavailable: bool = False):
+        self.unavailable = unavailable
+        self.start_calls = 0
+        self.tasks = []
 
+    def resume(self) -> None:
+        pass
 
-class UnavailableEngine:
-    available = False
-    reason = "engine fake unavailable"
+    def start(self) -> None:
+        self.start_calls += 1
+        if self.unavailable:
+            raise OcrProcessStartupError("engine fake unavailable")
+
+    def process(self, task, *, timeout: float = 300.0) -> OcrProcessOutcome:
+        del timeout
+        self.tasks.append(task)
+        return OcrProcessOutcome(task.request_id, _result(task.image_path), 1.0)
 
 
 def _attempt(text: str, confidence: float) -> OcrAttempt:
@@ -114,25 +124,27 @@ def test_early_exit_and_engine_reuse(root: Path) -> None:
     app.event_queue = queue.Queue()
     app.stop_event = threading.Event()
     app.results = ["old-result"]
-    created: list[ReusableEngine] = []
+    app.worker_manager = None
+    app.batch_progress = None
+    app._ocr_process_client = ReusableProcessClient()
     original = CheckVehicleApp._make_engine
     try:
-        CheckVehicleApp._make_engine = staticmethod(lambda *_args: created.append(ReusableEngine()) or created[-1])
+        CheckVehicleApp._make_engine = staticmethod(lambda *_args: (_ for _ in ()).throw(AssertionError("Paddle must stay in the child process")))
         CheckVehicleApp._worker_process(app, [image_path, image_path], root / "out.xlsx", "PaddleOCR Local", None, None, "", None, "", None, "", 10, 45, 1, "balanced")
     finally:
         CheckVehicleApp._make_engine = original
     events = list(app.event_queue.queue)
-    assert len(created) == 1 and any(event[0] == "engine_ready" for event in events)
+    assert app._ocr_process_client.start_calls == 1 and len(app._ocr_process_client.tasks) == 2
+    assert any(event[0] == "engine_ready" for event in events)
     assert any(event[0] == "done_scan" for event in events) and app.results == ["old-result"]
 
     app.event_queue = queue.Queue()
-    original = CheckVehicleApp._make_engine
-    try:
-        CheckVehicleApp._make_engine = staticmethod(lambda *_args: UnavailableEngine())
-        CheckVehicleApp._worker_process(app, [image_path], root / "out.xlsx", "PaddleOCR Local", None, None, "", None, "", None, "", 10, 45, 1, "balanced")
-    finally:
-        CheckVehicleApp._make_engine = original
-    assert app.event_queue.get_nowait()[0] == "engine_unavailable" and app.results == ["old-result"]
+    app._ocr_process_client = ReusableProcessClient(unavailable=True)
+    CheckVehicleApp._worker_process(app, [image_path], root / "out.xlsx", "PaddleOCR Local", None, None, "", None, "", None, "", 10, 45, 1, "balanced")
+    unavailable_events = list(app.event_queue.queue)
+    assert [event[0] for event in unavailable_events] == ["ocr_tool_status", "engine_unavailable"]
+    assert unavailable_events[-1][1] == "Không thể chuẩn bị công cụ nhận diện. Hãy thử mở lại ứng dụng."
+    assert app.results == ["old-result"]
 
 
 def test_atomic_excel(root: Path) -> None:

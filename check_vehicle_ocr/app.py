@@ -35,12 +35,13 @@ from .models import (
     coerce_expected_plate_count,
 )
 from .ocr import TesseractOcrEngine, find_tesseract
-from .paddle_ocr_engine import PaddleOcrEngine, current_model_selection
+from .ocr_models import current_model_selection
 from .plate_recognizer import DEFAULT_PLATE_RECOGNIZER_REGION, PlateRecognizerEngine
 from .plate_formatting import DetectedPlateFormat, PlateFormatStatus, PlateType, coerce_plate_type
 from .processor import process_image
 from .providers import OpenAICompatibleProvider, ProviderConfig, ProviderStatus, redact_provider_error
 from .services.progress_service import BatchProgress, BatchStatus
+from .services.ocr_process import OcrProcessClient, OcrProcessCrashed, OcrProcessError, OcrProcessTask
 from .services.worker_manager import WorkItem, WorkerManager, WorkerSettings
 from .telegram_notify import AsyncTelegramNotifier, TelegramSettings
 from .ui import ApplicationShell
@@ -206,17 +207,17 @@ class _UnavailableEngine:
 class _HybridReviewEngine:
     """PaddleOCR first, then one configured online provider only when needed."""
 
-    def __init__(self, local_engine: PaddleOcrEngine, online_engine: GptVisionEngine):
+    def __init__(self, local_engine: object | None, online_engine: GptVisionEngine):
         self.local_engine = local_engine
         self.online_engine = online_engine
         self.reason = ""
 
     @property
     def available(self) -> bool:
-        local_ready = self.local_engine.available
+        local_ready = self.local_engine is None or bool(getattr(self.local_engine, "available", False))
         online_ready = self.online_engine.available
         if not local_ready:
-            self.reason = self.local_engine.reason
+            self.reason = str(getattr(self.local_engine, "reason", "PaddleOCR chưa sẵn sàng."))
         elif not online_ready:
             self.reason = self.online_engine.reason
         return local_ready and online_ready
@@ -301,6 +302,7 @@ class CheckVehicleApp(tk.Tk):
         self.batch_progress: BatchProgress | None = None
         self.current_batch_session: BatchSession | None = None
         self.worker_manager: WorkerManager | None = None
+        self._ocr_process_client: OcrProcessClient | None = None
         self.telegram_notifier: AsyncTelegramNotifier | None = None
         self.telegram_percent_sent: set[int] = set()
         self._telegram_finished_batch_id = ""
@@ -1106,7 +1108,10 @@ class CheckVehicleApp(tk.Tk):
         self.telegram_percent_sent.clear()
         self._start_telegram_lifecycle(len(target_images), engine_mode)
 
-        self.status_var.set("Đang chuẩn bị nhận diện…")
+        if engine_mode in {"PaddleOCR Local", HYBRID_ENGINE_MODE}:
+            self.status_var.set("Đang chuẩn bị công cụ nhận diện…")
+        else:
+            self.status_var.set("Đang chuẩn bị nhận diện…")
         self._log(f"Đang chuẩn bị {engine_mode} trong worker nền.")
         args = (
             list(target_images),
@@ -1137,6 +1142,9 @@ class CheckVehicleApp(tk.Tk):
         self.stop_event.set()
         if self.worker_manager:
             self.worker_manager.stop()
+        ocr_process_client = self.__dict__.get("_ocr_process_client")
+        if ocr_process_client is not None:
+            ocr_process_client.cancel_pending()
         if self.batch_progress:
             self.batch_progress.request_stop()
         self.stop_button.configure(state="disabled")
@@ -1166,20 +1174,6 @@ class CheckVehicleApp(tk.Tk):
     ) -> None:
         crop_dir = output_path.with_suffix("").parent / f"{output_path.stem}_crops"
         try:
-            engine = self._make_engine(
-                engine_mode,
-                tesseract_path,
-                openai_api_key,
-                gpt_model,
-                gemini_api_key,
-                gemini_model,
-                plate_token,
-                plate_region,
-                custom_provider,
-            )
-            if not engine.available:
-                self.event_queue.put(("engine_unavailable", engine.reason))
-                return
             settings = worker_settings if isinstance(worker_settings, WorkerSettings) else WorkerSettings(
                 mode="MANUAL",
                 image_workers=max(1, int(worker_settings)),
@@ -1187,6 +1181,35 @@ class CheckVehicleApp(tk.Tk):
                 api_workers=max(1, int(worker_settings)),
                 queue_capacity=max(2, len(images)),
             )
+            ocr_process_client: OcrProcessClient | None = None
+            if engine_mode in {"PaddleOCR Local", HYBRID_ENGINE_MODE}:
+                ocr_process_client = self._get_ocr_process_client(settings.queue_capacity)
+                ocr_process_client.resume()
+                self.event_queue.put(("ocr_tool_status", "initializing"))
+                try:
+                    ocr_process_client.start()
+                except OcrProcessError:
+                    self.event_queue.put(("engine_unavailable", "Không thể chuẩn bị công cụ nhận diện. Hãy thử mở lại ứng dụng."))
+                    return
+                self.event_queue.put(("ocr_tool_status", "ready"))
+
+            if engine_mode == "PaddleOCR Local":
+                engine = None
+            else:
+                engine = self._make_engine(
+                    engine_mode,
+                    tesseract_path,
+                    openai_api_key,
+                    gpt_model,
+                    gemini_api_key,
+                    gemini_model,
+                    plate_token,
+                    plate_region,
+                    custom_provider,
+                )
+                if not engine.available:
+                    self.event_queue.put(("engine_unavailable", engine.reason))
+                    return
             if engine_mode == HYBRID_ENGINE_MODE:
                 self._run_hybrid_pipeline(
                     images=images,
@@ -1201,6 +1224,7 @@ class CheckVehicleApp(tk.Tk):
                     batch_session=batch_session,
                     tesseract_fallback_enabled=tesseract_fallback_enabled,
                     tesseract_path=tesseract_path,
+                    ocr_process_client=ocr_process_client,
                 )
                 return
             manager = WorkerManager(settings, engine_mode, self.stop_event)
@@ -1223,10 +1247,16 @@ class CheckVehicleApp(tk.Tk):
                     self.event_queue.put(("progress", progress.snapshot()))
                     last_progress_event = now
 
+            request_ids = {image: str(index) for index, image in enumerate(images)}
+
             def prepare(image: Path):
                 # Decode/exif conversion is independent from inference.  Passing
                 # the decoded frame to the local processor avoids a second read.
-                if engine_mode in {"PaddleOCR Local", "Local OCR", HYBRID_ENGINE_MODE}:
+                if engine_mode == "PaddleOCR Local":
+                    if not image.is_file():
+                        raise FileNotFoundError(f"Không tìm thấy ảnh: {image}")
+                    return image, None, None
+                if engine_mode in {"Local OCR", HYBRID_ENGINE_MODE}:
                     image_bgr, image_size = load_image(image)
                     return image, image_bgr, image_size
                 if not image.is_file():
@@ -1235,6 +1265,29 @@ class CheckVehicleApp(tk.Tk):
 
             def infer(prepared):
                 image, image_bgr, image_size = prepared
+                if engine_mode == "PaddleOCR Local" and ocr_process_client is not None:
+                    local_result = self._run_paddle_process_task(
+                        ocr_process_client,
+                        request_id=request_ids[image],
+                        image=image,
+                        crop_dir=crop_dir,
+                        blur_threshold=blur_threshold,
+                        confidence_threshold=max(20.0, confidence_threshold - 10.0),
+                        paddle_scan_mode=paddle_scan_mode,
+                        selected_plate_type=batch_session.selected_plate_type if batch_session else PlateType.NONE,
+                        expected_plate_count=batch_session.expected_plate_count if batch_session else ExpectedPlateCount.ONE,
+                    )
+                    return _run_tesseract_fallback_if_needed(
+                        local_result,
+                        image,
+                        crop_dir,
+                        tesseract_fallback_enabled,
+                        tesseract_path,
+                        blur_threshold,
+                        confidence_threshold,
+                        batch_session.selected_plate_type if batch_session else PlateType.NONE,
+                        batch_session.expected_plate_count if batch_session else ExpectedPlateCount.ONE,
+                    )
                 return self._process_one(
                     0,
                     image,
@@ -1294,6 +1347,64 @@ class CheckVehicleApp(tk.Tk):
                 self.event_queue.put(("progress", self.batch_progress.snapshot()))
             self.event_queue.put(("error", str(exc)))
 
+    def _get_ocr_process_client(self, queue_capacity: int) -> OcrProcessClient:
+        client = self.__dict__.get("_ocr_process_client")
+        if client is None:
+            client = OcrProcessClient(queue_capacity=min(4, max(1, int(queue_capacity))))
+            self._ocr_process_client = client
+        return client
+
+    def _run_paddle_process_task(
+        self,
+        client: OcrProcessClient,
+        *,
+        request_id: str,
+        image: Path,
+        crop_dir: Path,
+        blur_threshold: float,
+        confidence_threshold: float,
+        paddle_scan_mode: str,
+        selected_plate_type: PlateType,
+        expected_plate_count: ExpectedPlateCount,
+    ) -> ImageResult:
+        task = OcrProcessTask(
+            request_id=request_id,
+            image_path=image,
+            crop_dir=crop_dir,
+            mode=paddle_scan_mode,
+            plate_type=selected_plate_type,
+            expected_plate_count=expected_plate_count,
+            blur_threshold=blur_threshold,
+            confidence_threshold=confidence_threshold,
+        )
+        try:
+            outcome = client.process(task)
+        except OcrProcessCrashed:
+            self.event_queue.put(("ocr_tool_status", "restarting"))
+            try:
+                client.restart_after_crash()
+                self.event_queue.put(("ocr_tool_status", "ready"))
+                outcome = client.process(task)
+            except OcrProcessError as exc:
+                self.stop_event.set()
+                if self.worker_manager is not None:
+                    self.worker_manager.stop()
+                self.event_queue.put(("ocr_tool_status", "failed"))
+                raise OcrProcessError("Không thể khởi động lại công cụ nhận diện; batch đã dừng an toàn.") from exc
+        except OcrProcessError as exc:
+            self.stop_event.set()
+            if self.worker_manager is not None:
+                self.worker_manager.stop()
+            self.event_queue.put(("ocr_tool_status", "failed"))
+            raise OcrProcessError("Công cụ nhận diện gặp lỗi; batch đã dừng an toàn.") from exc
+        if outcome.error:
+            raise RuntimeError("Công cụ nhận diện không xử lý được ảnh này.")
+        if outcome.result is None:
+            raise RuntimeError("Công cụ nhận diện không trả kết quả cho ảnh này.")
+        outcome.result.pipeline_metrics["ocr_process_ms"] = outcome.timing_ms
+        outcome.result.pipeline_metrics["paddle_init_count"] = client.init_count
+        return outcome.result
+
     def _run_hybrid_pipeline(
         self,
         *,
@@ -1309,6 +1420,7 @@ class CheckVehicleApp(tk.Tk):
         batch_session: BatchSession | None,
         tesseract_fallback_enabled: bool = False,
         tesseract_path: str | None = None,
+        ocr_process_client: OcrProcessClient | None = None,
     ) -> None:
         """Run all local OCR first, then a bounded AI-review pass.
 
@@ -1353,24 +1465,43 @@ class CheckVehicleApp(tk.Tk):
             self.event_queue.put(("retry_result" if retry_failed else "result", progress.completed, len(images), result, snapshot))
             emit_progress()
 
+        request_ids = {image: str(index) for index, image in enumerate(images)}
+
         def local_prepare(image: Path):
+            if ocr_process_client is not None:
+                if not image.is_file():
+                    raise FileNotFoundError(f"Không tìm thấy ảnh: {image}")
+                return image, None, None
             image_bgr, image_size = load_image(image)
             return image, image_bgr, image_size
 
         def local_infer(prepared):
             image, image_bgr, image_size = prepared
-            local_result = process_image(
-                image,
-                crop_dir,
-                engine.local_engine,
-                blur_threshold,
-                max(20.0, confidence_threshold - 10.0),
-                paddle_scan_mode=paddle_scan_mode,
-                image_bgr=image_bgr,
-                image_size=image_size,
-                selected_plate_type=batch_session.selected_plate_type if batch_session else PlateType.NONE,
-                expected_plate_count=batch_session.expected_plate_count if batch_session else ExpectedPlateCount.ONE,
-            )
+            if ocr_process_client is not None:
+                local_result = self._run_paddle_process_task(
+                    ocr_process_client,
+                    request_id=request_ids[image],
+                    image=image,
+                    crop_dir=crop_dir,
+                    blur_threshold=blur_threshold,
+                    confidence_threshold=max(20.0, confidence_threshold - 10.0),
+                    paddle_scan_mode=paddle_scan_mode,
+                    selected_plate_type=batch_session.selected_plate_type if batch_session else PlateType.NONE,
+                    expected_plate_count=batch_session.expected_plate_count if batch_session else ExpectedPlateCount.ONE,
+                )
+            else:
+                local_result = process_image(
+                    image,
+                    crop_dir,
+                    engine.local_engine,
+                    blur_threshold,
+                    max(20.0, confidence_threshold - 10.0),
+                    paddle_scan_mode=paddle_scan_mode,
+                    image_bgr=image_bgr,
+                    image_size=image_size,
+                    selected_plate_type=batch_session.selected_plate_type if batch_session else PlateType.NONE,
+                    expected_plate_count=batch_session.expected_plate_count if batch_session else ExpectedPlateCount.ONE,
+                )
             return _run_tesseract_fallback_if_needed(
                 local_result,
                 image,
@@ -1517,12 +1648,14 @@ class CheckVehicleApp(tk.Tk):
                 api_mode=str(provider.get("api_mode") or "auto"),
                 cached_api_mode=str(provider.get("cached_api_mode") or ""),
             )
-            return _HybridReviewEngine(PaddleOcrEngine(25.0), online_engine)
+            return _HybridReviewEngine(None, online_engine)
         if engine_mode == "Gemini Vision":
             return GeminiVisionEngine(gemini_api_key, gemini_model)
         if engine_mode == "Plate Recognizer":
             return PlateRecognizerEngine(plate_token, plate_region)
         if engine_mode == "PaddleOCR Local":
+            from .paddle_ocr_engine import PaddleOcrEngine
+
             return PaddleOcrEngine(25.0)
         return TesseractOcrEngine(tesseract_path, 35.0)
 
@@ -1639,6 +1772,18 @@ class CheckVehicleApp(tk.Tk):
                     worker_text = self._format_worker_summary(workers)
                     self.status_var.set(f"Đang quét {total} ảnh. {worker_text}")
                     self._log(f"Bắt đầu quét {total} ảnh bằng {engine_mode}.")
+                elif kind == "ocr_tool_status":
+                    _, state = event
+                    messages = {
+                        "initializing": "Đang chuẩn bị công cụ nhận diện…",
+                        "ready": "Công cụ nhận diện đã sẵn sàng",
+                        "restarting": "Công cụ nhận diện gặp lỗi và đang khởi động lại…",
+                        "failed": "Không thể khởi động lại công cụ nhận diện. Đã dừng quét an toàn.",
+                    }
+                    message = messages.get(str(state), "")
+                    if message:
+                        self.status_var.set(message)
+                        self._log(message)
                 elif kind == "engine_unavailable":
                     _, reason = event
                     self.start_button.configure(state="normal")
@@ -3710,6 +3855,11 @@ class CheckVehicleApp(tk.Tk):
     def destroy(self) -> None:
         if self.worker_manager:
             self.worker_manager.stop()
+        ocr_process_client = self.__dict__.get("_ocr_process_client")
+        if ocr_process_client is not None:
+            ocr_process_client.cancel_pending()
+            ocr_process_client.close(timeout=10.0)
+            self._ocr_process_client = None
         if self.telegram_notifier:
             self.telegram_notifier.close()
             self.telegram_notifier = None

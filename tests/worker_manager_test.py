@@ -75,6 +75,44 @@ def _measure_preparation(image_workers: int, expected: int) -> int:
     return maximum
 
 
+def _assert_stop_keeps_inflight_result() -> None:
+    stop_event = threading.Event()
+    manager = WorkerManager(
+        WorkerSettings(mode="MANUAL", image_workers=1, local_ocr_workers=1, api_workers=1, queue_capacity=2),
+        "PaddleOCR Local",
+        stop_event,
+    )
+    inference_started = threading.Event()
+    allow_finish = threading.Event()
+    holder: dict[str, list[int | None]] = {}
+    finished: list[int] = []
+
+    def infer(value: int) -> int:
+        inference_started.set()
+        assert allow_finish.wait(timeout=2.0)
+        return value * 10
+
+    thread = threading.Thread(
+        target=lambda: holder.setdefault(
+            "results",
+            manager.run_pipeline(
+                [1, 2],
+                lambda value: value,
+                infer,
+                on_finished=lambda item, result, _pool: finished.append(item.index) if not isinstance(result, Exception) else None,
+            ),
+        )
+    )
+    thread.start()
+    assert inference_started.wait(timeout=2.0)
+    manager.stop()
+    allow_finish.set()
+    thread.join(timeout=3.0)
+    assert not thread.is_alive()
+    assert holder["results"] == [10, None]
+    assert finished == [0]
+
+
 def main() -> int:
     assert _measure_preparation(1, 1) == 1
     assert _measure_preparation(2, 2) == 2
@@ -98,6 +136,7 @@ def main() -> int:
     )
     assert results == [0, None, 4]
     assert sorted(finished) == [(0, False, "local_ocr"), (1, True, "local_ocr"), (2, False, "local_ocr")]
+    _assert_stop_keeps_inflight_result()
     print("worker_manager_test OK")
     return 0
 
