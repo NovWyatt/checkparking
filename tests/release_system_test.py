@@ -27,6 +27,7 @@ from check_vehicle_ocr.updater import (
 from check_vehicle_ocr.version import VERSION
 from check_vehicle_ocr.model_registry import ModelRuntimeManager
 from tools.write_build_metadata import windows_version_info
+from tools.build_model_component import _runtime_files
 
 
 class Response(io.BytesIO):
@@ -155,6 +156,18 @@ def test_windows_executable_version_resource() -> None:
     assert "windows-version-info.txt" in spec and "version=str(windows_version_info)" in spec
 
 
+def test_model_component_excludes_local_metadata() -> None:
+    with tempfile.TemporaryDirectory() as temporary:
+        model = Path(temporary)
+        for name in ("inference.json", "inference.pdiparams", "inference.yml", ".gitattributes", "README.md"):
+            (model / name).write_text("fixture", encoding="utf-8")
+        assert [path.name for path in _runtime_files(model)] == [
+            "inference.json",
+            "inference.pdiparams",
+            "inference.yml",
+        ]
+
+
 def main() -> int:
     test_version_and_model_manifest()
     test_checksum_fallback_and_pending_helper()
@@ -163,6 +176,7 @@ def main() -> int:
     test_release_workflow_publishes_the_model_component()
     test_pyinstaller_model_bundle_excludes_local_cache()
     test_windows_executable_version_resource()
+    test_model_component_excludes_local_metadata()
     print("release_system_test OK")
     return 0
 

@@ -10,6 +10,12 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+RUNTIME_MODEL_FILES = (
+    "config.json",
+    "inference.json",
+    "inference.pdiparams",
+    "inference.yml",
+)
 
 
 def _sha256(path: Path) -> str:
@@ -18,6 +24,10 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: source.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _runtime_files(source: Path) -> list[Path]:
+    return [path for name in RUNTIME_MODEL_FILES if (path := source / name).is_file()]
 
 
 def main() -> int:
@@ -41,9 +51,8 @@ def main() -> int:
         raise SystemExit("Bundled PP-OCRv6 Small model files are missing.")
     with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
         for source in source_dirs:
-            for path in sorted(source.rglob("*")):
-                if path.is_file() and ".cache" not in path.parts:
-                    archive.write(path, path.relative_to(root))
+            for path in _runtime_files(source):
+                archive.write(path, path.relative_to(root))
     checksum = _sha256(archive_path)
     payload = {
         "schema_version": 1,
