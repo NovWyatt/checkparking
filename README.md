@@ -1,72 +1,221 @@
 # Check Vehicle OCR
 
-Tool desktop Python de import hang loat anh xe, nhan dien bien so bang OCR va xuat Excel.
+[![Latest Release](https://img.shields.io/github/v/release/NovWyatt/checkparking?sort=semver&display_name=tag&label=Release)](https://github.com/NovWyatt/checkparking/releases/latest)
+[![Windows x64](https://img.shields.io/badge/Windows-x64-0078D4?logo=windows11&logoColor=white)](https://github.com/NovWyatt/checkparking/releases/latest)
+[![Python](https://img.shields.io/badge/Python-3.11%20%7C%203.12-3776AB?logo=python&logoColor=white)](pyproject.toml)
+[![License](https://img.shields.io/github/license/NovWyatt/checkparking)](LICENSE)
+[![CI](https://github.com/NovWyatt/checkparking/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/NovWyatt/checkparking/actions/workflows/ci.yml)
 
-## Chuc nang
+Ứng dụng Windows giúp quét hàng loạt ảnh phương tiện, nhận diện biển số, kiểm tra kết quả và xuất Excel.
 
-- Import tung file anh hoac ca folder anh.
-- Ho tro nhieu dinh dang anh thong qua Pillow: JPG, PNG, WEBP, BMP, TIFF, GIF, HEIC/HEIF/AVIF neu `pillow-heif` cai duoc.
-- Co 5 engine:
-  - `PaddleOCR Local`: engine mac dinh, chay local bang OpenCV + PaddleOCR, khong can API key va khong bi rate limit.
-  - `Gemini Vision`: gui anh len Google Gemini de doc bien so bang model nhin anh tong quat.
-  - `Plate Recognizer`: API chuyen doc bien so xe, mac dinh region `vn`, nen uu tien cho bai toan bai xe/nhieu xe.
-  - `GPT Vision`: gui anh da resize/nen len OpenAI de doc bien so.
-  - `Local OCR`: xu ly local bang OpenCV + Tesseract, dung khi khong co API key.
-- `PaddleOCR Local` trong bản phát hành 1.9.3 dùng PP-OCRv6 Small đã bundle; chế độ tiết kiệm tài nguyên dùng PP-OCRv6 Tiny. PP-OCRv5 Mobile vẫn được giữ trong registry để quay lại khi cần.
-- Từ bản 1.9.3, công cụ nhận diện chạy tách biệt khỏi giao diện để giảm hiện tượng đứng hoặc khựng trong lúc quét; detector, model và kết quả OCR vẫn giữ nguyên theo regression benchmark.
-- `PaddleOCR Local` co them ONNX license-plate detector `yolo-v9-t-384-license-plate-end2end` de tim dung box bien so truoc khi OCR; model nhe, chay CPU local, giup anh nhieu xe it sot bien hon ma khong phu thuoc API.
-- Khi dùng PaddleOCR, ứng dụng ưu tiên detector vùng biển trước OCR. Mặc định batch xuất một biển số tốt nhất mỗi ảnh; chỉ chế độ nhiều biển mới giữ các bbox biển vật lý riêng biệt.
-- Pipeline PaddleOCR ưu tiên tốc độ và tránh text overlay: `Nhanh` OCR tối đa hai crop detector, `Cân bằng` tối đa ba crop và chỉ fallback khi crop không tạo candidate hợp lệ; hai chế độ này giới hạn ảnh làm việc ở cạnh dài 1280 nhưng vẫn giữ kích thước và bbox theo ảnh gốc. `Kỹ` không áp dụng giới hạn này và được thử thêm fallback có giới hạn.
-- Anh fail nhung van net se tu chay rescue pass: doc lai khong che timestamp va quet them cac o focus de bat bien so nam lech goc, bi time mark che mot phan, hoac co nhieu xe trong anh.
-- `GPT Vision` dung OpenAI Responses API voi model mac dinh `gpt-4.1` de nhanh va on dinh hon; app co retry/fallback model neu model chinh khong kha dung.
-- `Gemini Vision` dung model mac dinh `gemini-2.5-flash`, ep JSON schema, gui anh goc kem crop nghi bien so, va fallback sang cac model Gemini khac neu model chinh khong kha dung.
-- Khi dung Gemini, app tu gioi han toc do goi API de tranh rate-limit va se thu Local OCR fallback neu Gemini loi hoac khong doc duoc bien.
-- Gemini loc ket qua theo cau truc bien so Viet Nam va danh dau can review khi anh mo, bien so bi che, nho, hoac ky tu con nghi ngo.
-- GPT Vision gui anh goc kem it crop nghi bien so hon de giam thoi gian cho moi anh.
-- OpenAI, Gemini va Plate Recognizer API key/token co the luu tren may bang Windows DPAPI, lan sau mo app khong can nhap lai.
-- Tu dong tim vung nghi bien so bang OpenCV khi dung `Local OCR`.
-- Quet song song nhieu anh de tang toc; co tuy chinh so luong thread trong giao dien.
-- Co 2 luot detect va mot luot outline de bat them truong hop anh co nhieu xe/bien so.
-- Bo qua cac vung giong timestamp o goc/tren/duoi anh va loc text giong ngay gio.
-- OCR bang Tesseract, co tien xu ly anh nhieu kieu de tang kha nang doc bien so.
-- Giao dien chinh gom danh sach tung anh, preview anh dang chon, va danh sach tat ca bien so cua anh do de tick/sua truc tiep.
-- Sau khi quet xong co popup chon `Review bang anh`, `Xuat luon`, hoac `Cancel`.
-- Review bang anh hien preview anh lon, cac bien so doc duoc, o sua va checkbox OK cho tung bien so.
-- Giu dinh dang bien so co dau gach, khoang trang, dau cham neu OCR doc duoc, vi du `70-K1 247.11`.
-- Do do mo cua anh va tach rieng anh/xe can kiem tra thu cong.
-- Xuat Excel gom:
-  - `Tong_quan`
-  - `Theo_tung_anh`
-  - `Bien_so_doc_duoc`
-  - `Can_kiem_tra`
-  - `Tat_ca_anh`
-- Khi xuat tu app sau review, Excel co them `Review_tat_ca` va chi dua dong da Tick OK vao sheet `Bien_so_doc_duoc`.
-- Excel nhung thumbnail anh truc tiep vao sheet, kem crop bien so neu Local OCR tao duoc crop.
-- Luu crop bien so vao folder rieng de doi chieu nhanh.
+**Phiên bản ổn định hiện tại:** v1.9.3
 
-## Cai dat de chay source
+[**⬇️ Tải bản mới nhất**](https://github.com/NovWyatt/checkparking/releases/latest)
+
+![Giao diện quét ảnh của Check Vehicle OCR v1.9.3](docs/images/check-vehicle-ocr-v1.9.3.png)
+
+## Tính năng chính
+
+### Quét ảnh hàng loạt
+
+- Chọn từng ảnh hoặc cả thư mục, có thể quét các thư mục con.
+- Xử lý nhiều ảnh trong một lượt quét, theo dõi tiến trình và xem lại từng kết quả.
+- Giao diện tiếp tục phản hồi trong lúc OCR đang chạy.
+- Mặc định chỉ xuất một biển số chính cho mỗi ảnh; chế độ nhiều biển chỉ giữ các vùng biển vật lý khác nhau do detector tìm thấy.
+
+### OCR cục bộ
+
+- PaddleOCR 3.7.0, PaddlePaddle 3.3.1 và PaddleX 3.7.2.
+- PP-OCRv6 Small là model mặc định; PP-OCRv5 được giữ để quay lại khi cần.
+- Hoạt động trên máy, không cần API key và không cần gửi ảnh ra ngoài.
+- PaddleOCR chạy tách biệt khỏi giao diện, với một model được khởi tạo và giữ trong suốt batch.
+
+### Phát hiện vùng biển số
+
+- ONNX license-plate detector ưu tiên tìm vùng biển trước khi OCR.
+- Pipeline detector-first giúp hạn chế timestamp, watermark, địa chỉ và chữ ngoài biển số.
+- Candidate được lọc, chấm điểm và định dạng trước khi chọn kết quả chính.
+- Ảnh khó vẫn có bước dự phòng có giới hạn; OCR toàn cảnh không chạy sau khi đã có crop biển hợp lệ.
+
+### Kiểm tra kết quả
+
+- Xem ảnh gốc, crop biển số, OCR nguyên bản, kết quả đã định dạng và độ tin cậy.
+- Sửa tay, đánh dấu đã kiểm tra hoặc thêm biển số khi cần.
+- Biển đặc biệt và ảnh chưa chắc chắn được tách riêng để đối chiếu.
+
+### Tích hợp tùy chọn
+
+- AI trực tuyến tương thích OpenAI để kiểm tra ảnh khó.
+- Tesseract 5.5.3 làm OCR dự phòng.
+- Thông báo Telegram theo vòng đời batch.
+- Update Center cho ứng dụng, model OCR và component Tesseract.
+
+## Cài đặt
+
+### Cách khuyên dùng
+
+1. Mở trang [Releases](https://github.com/NovWyatt/checkparking/releases/latest).
+2. Tải file `CheckVehicleOCR-Setup-<version>.exe` dành cho Windows x64.
+3. Chạy installer và hoàn tất các bước cài đặt.
+4. Mở **Check Vehicle OCR** từ Start Menu hoặc shortcut đã chọn.
+
+Người dùng thông thường **không cần** cài Python, VS Code, PaddleOCR, `pip` hoặc Tesseract thủ công.
+
+Windows SmartScreen có thể hiển thị cảnh báo đối với bản chưa được ký số. Hãy kiểm tra nguồn tải là GitHub Releases của `NovWyatt/checkparking` và đối chiếu SHA-256 khi cần.
+
+### Portable
+
+Tải `CheckVehicleOCR-Portable-<version>.zip`, giải nén vào một thư mục riêng rồi chạy `CheckVehicleOCR.exe`. Bản portable phù hợp khi không muốn cài ứng dụng; không chạy trực tiếp EXE từ bên trong file ZIP.
+
+## Sử dụng nhanh
+
+1. Bấm **Chọn ảnh** hoặc **Chọn thư mục**.
+2. Chọn loại biển số: **Xe máy**, **Ô tô** hoặc **Không tự định dạng**.
+3. Giữ **Một biển số — Khuyên dùng** nếu mỗi ảnh thường chỉ có một xe cần đọc.
+4. Chọn **Cục bộ**, **Cục bộ + AI kiểm tra ảnh khó** hoặc **AI trực tuyến**.
+5. Chọn chế độ **Nhanh**, **Cân bằng** hoặc **Kỹ**.
+6. Bấm **Bắt đầu quét**, sau đó xem và sửa các kết quả cần kiểm tra.
+7. Bấm **Xuất Excel** khi đã sẵn sàng.
+
+## Các chế độ quét
+
+| Chế độ | Phù hợp |
+|---|---|
+| **Nhanh** | Ít bước xử lý, ưu tiên tốc độ cho ảnh rõ. |
+| **Cân bằng — Khuyên dùng** | Phù hợp với đa số bộ ảnh. |
+| **Kỹ** | Thử thêm nhiều cách xử lý cho ảnh khó và sẽ chậm hơn. |
+
+FAST và Cân bằng giới hạn ảnh làm việc ở cạnh dài 1280 để xử lý ảnh điện thoại hiệu quả hơn, nhưng kích thước và tọa độ bbox trong kết quả vẫn theo ảnh gốc. Chế độ Kỹ giữ pipeline đầy đủ hơn.
+
+## Loại biển số
+
+Ứng dụng chỉ thêm dấu gạch khi chuỗi OCR khớp đúng cấu trúc đã hỗ trợ.
+
+| Lựa chọn | Ví dụ kết quả |
+|---|---|
+| **Xe máy** | `59X1-12345`, `59MN-12345` |
+| **Ô tô** | `59X-12345` |
+| **Không tự định dạng** | Giữ nguyên kết quả OCR để người dùng kiểm tra. |
+
+Chuỗi vẫn có cấu trúc giống biển số nhưng không khớp mẫu chuẩn sẽ không bị ép định dạng. Chúng được giữ trong sheet `Bien_so_dac_biet`; timestamp, watermark và OCR rác bị loại không được đưa vào sheet này.
+
+## OCR cục bộ và AI tùy chọn
+
+**Cục bộ — Khuyên dùng** chạy PP-OCRv6 Small hoàn toàn trên máy. ONNX detector tìm vùng biển số trước, sau đó PaddleOCR đọc crop và chọn candidate phù hợp nhất.
+
+**Cục bộ + AI kiểm tra ảnh khó** vẫn chạy PaddleOCR trước. Theo chính sách mặc định, AI chỉ nhận ảnh khi kết quả chính không đọc được, có độ tin cậy thấp hoặc thực sự cần kiểm tra; candidate nhiễu đã bị loại không kích hoạt AI.
+
+**AI trực tuyến** dùng provider tương thích OpenAI đã cấu hình. Ứng dụng hỗ trợ:
+
+- Base URL tùy chỉnh;
+- API key;
+- chọn model hoặc làm mới danh sách model;
+- Responses API và Chat Completions theo khả năng của provider.
+
+Ứng dụng vẫn dùng được đầy đủ với OCR cục bộ khi không có AI hoặc API key.
+
+## AI trực tuyến (tùy chọn)
+
+Khi bật chế độ có AI, dữ liệu cần thiết có thể được gửi tới provider do người dùng cấu hình và có thể phát sinh chi phí. Ảnh **không luôn được gửi lên cloud**: ở chế độ cục bộ thì không gửi; ở chế độ hybrid, chỉ các ảnh phù hợp với chính sách kiểm tra mới được gửi.
+
+Hãy xem chính sách dữ liệu, lưu trữ và chi phí của provider trước khi sử dụng. Kiểm thử tự động của dự án dùng mock và không gọi dịch vụ trả phí thật.
+
+## Tesseract dự phòng
+
+Tesseract 5.5.3 là fallback tùy chọn, không phải OCR chính. Khi PaddleOCR đã đọc rõ biển số, Tesseract không được gọi.
+
+Để cài component đã xác minh:
+
+1. Mở **Cài đặt → Cập nhật**.
+2. Tại thẻ **Tesseract dự phòng**, bấm **Cài đặt**.
+3. Ứng dụng tải component Windows x64 từ release của dự án, kiểm tra SHA-256, cài vào `LocalAppData` và chạy OCR self-test.
+
+Ứng dụng tự lưu đường dẫn component; người dùng không cần sửa `PATH` hoặc tìm `tesseract.exe`. Có thể quay lại bản trước hoặc gỡ component do ứng dụng quản lý. Quy trình build từ source được mô tả trong [tài liệu Tesseract component](docs/TESSERACT_COMPONENT_RELEASE.md).
+
+## Xuất Excel
+
+File Excel hiện có các sheet sau:
+
+- `Tong_quan`: thống kê batch;
+- `Theo_tung_anh`: kết quả theo từng file;
+- `Bien_so_doc_duoc`: các biển số có thể xuất;
+- `Bien_so_dac_biet`: cấu trúc giống biển số nhưng không khớp mẫu chuẩn;
+- `So_sanh_OCR`: bằng chứng PaddleOCR/Tesseract khi có đối chiếu;
+- `Can_kiem_tra`: ảnh hoặc biển số cần review;
+- `Tat_ca_anh`: danh sách toàn bộ ảnh;
+- `Review_tat_ca`: chỉ có khi xuất sau bước review.
+
+File Excel giữ OCR nguyên bản, chuỗi đã làm sạch, kết quả đã định dạng, trạng thái review và đường dẫn đối chiếu. Có thể nhúng thumbnail ảnh/crop nếu bật tùy chọn. Các giá trị bắt đầu bằng ký tự công thức được escape để giảm rủi ro Formula Injection.
+
+## Telegram
+
+Telegram không bắt buộc. Khi được bật và cấu hình, ứng dụng có thể gửi thông báo:
+
+- bắt đầu batch;
+- tiến độ theo mốc phần trăm;
+- hoàn tất hoặc dừng;
+- lỗi batch.
+
+Có tùy chọn che biển số trong thông báo. Việc gửi chạy nền; lỗi Telegram không làm dừng OCR.
+
+## Cập nhật
+
+Update Center quản lý bốn nhóm cập nhật có kiểm chứng:
+
+- ứng dụng Check Vehicle OCR;
+- PaddleOCR runtime đi cùng bản phát hành ứng dụng đã kiểm thử;
+- model OCR đã đóng gói;
+- component Tesseract dự phòng.
+
+Nguồn mặc định của bản đóng gói là GitHub Releases tại `NovWyatt/checkparking`. Gói tải về phải có SHA-256 phù hợp; model và Tesseract dùng manifest riêng, thư mục versioned, bước kiểm tra trước khi kích hoạt và khả năng quay lại bản trước.
+
+Với bản đã đóng gói, người dùng chủ động kiểm tra, tải và xác nhận cài đặt. Trình hỗ trợ chỉ chạy installer đã xác minh sau khi ứng dụng đóng, kiểm tra sức khỏe bản mới và khôi phục bản trước nếu cài đặt thất bại. Bản chạy từ source không tự cài cập nhật.
+
+PaddleOCR runtime được nâng qua bản phát hành ứng dụng đã kiểm thử, không tự chạy `pip upgrade` trong bản production.
+
+## Quyền riêng tư
+
+- PaddleOCR và Tesseract xử lý local; ảnh không cần upload khi chỉ dùng OCR cục bộ.
+- Nếu bật AI trực tuyến, dữ liệu cần thiết được gửi tới provider đã cấu hình theo chế độ và chính sách đã chọn.
+- Telegram chỉ gửi thông báo theo các tùy chọn người dùng bật.
+- Khi người dùng chọn lưu khóa, ứng dụng dùng Windows DPAPI khi khả dụng; không nên chia sẻ file cài đặt hoặc log có dữ liệu nhạy cảm.
+
+Không có tuyên bố bảo mật tuyệt đối. Hãy dùng provider và Telegram phù hợp với chính sách dữ liệu của tổ chức bạn.
+
+## Hiệu năng
+
+Benchmark acceptance nội bộ của v1.9.3 trên 72 ảnh 1920×2560 ghi nhận:
+
+- FAST packaged: khoảng **123,5 giây**;
+- throughput: khoảng **35 ảnh/phút**;
+- kết quả: **70 primary / 2 review**;
+- heartbeat giao diện p95: khoảng **6,1 ms**;
+- số lần block trên 100 ms: **0**.
+
+PaddleOCR chạy trong một subprocess riêng để giảm hiện tượng đứng/khựng giao diện. FAST/Cân bằng dùng ảnh làm việc tối đa 1280 ở cạnh dài; chế độ Kỹ ưu tiên pipeline đầy đủ hơn.
+
+> Đây là benchmark nội bộ, không đại diện cho mọi máy hoặc mọi bộ ảnh và không phải tuyên bố độ chính xác trên dữ liệu thực tế.
+
+Chi tiết xem [báo cáo v1.9.3](docs/v1.9.3-ocr-subprocess-release-report.md) và [báo cáo tối ưu ảnh độ phân giải cao](docs/high-resolution-performance-fix-release-report.md).
+
+## Chạy từ source
+
+Windows là platform production chính. Source yêu cầu Python 3.11 hoặc 3.12 và Git LFS để lấy đầy đủ model weights.
 
 ```powershell
+git lfs pull
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
-pip install -r requirements.txt
-python main.py
+python -m pip install -r requirements-dev.txt
+python -s main.py
 ```
 
-## Development va release Windows
+Không dùng API/Telegram thật khi phát triển nếu không cần thiết. Cấu hình người dùng được lưu ngoài thư mục mã nguồn.
 
-Release version duoc quan ly tai `check_vehicle_ocr/version.py`. Tao moi truong
-doc lap va chay source bang:
+## Build Windows
 
-```powershell
-python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt -r requirements-build.txt
-.\.venv\Scripts\python.exe -s -B tests\ui_smoke_test.py
-.\.venv\Scripts\python.exe -s main.py
-```
-
-Tao Windows executable, installer va release assets da co SHA-256:
+Build installer cần Inno Setup 6. Chạy từ PowerShell tại thư mục gốc:
 
 ```powershell
 .\build_exe.ps1
@@ -74,63 +223,54 @@ Tao Windows executable, installer va release assets da co SHA-256:
 .\build_release_assets.ps1 -SkipBuild
 ```
 
-Chỉ upload asset trong `release-assets\`: installer Windows x64, portable ZIP,
-manifest cập nhật, runtime/model metadata, component Tesseract đã xác minh và
-`SHA256SUMS.txt`. Không upload settings, token, ảnh/output người dùng, `.venv`,
-`.runtime` hay audit output.
+Tệp đầu ra chính:
 
-## OCR engine
+- `release/CheckVehicleOCR/CheckVehicleOCR.exe`;
+- `installer/Output/CheckVehicleOCR-<version>-windows-x64-setup.exe`;
+- `release-assets/CheckVehicleOCR-Portable-<version>.zip`;
+- manifest và `SHA256SUMS.txt` trong `release-assets/`.
 
-Mac dinh nen dung `PaddleOCR Local` neu muon quet mien phi va khong phu thuoc quota. Engine nay chay local nen khong can API key; lan dau co the tai model PaddleOCR vao cache cua Windows user.
+`build_release_assets.ps1` yêu cầu component Tesseract và manifest đã được xác minh. Release workflow trên GitHub Actions build component này trước khi đóng gói ứng dụng.
 
-Neu dung engine API, co the nhap truc tiep trong giao dien, tick `Luu key cho lan sau`, hoac set bien moi truong:
+## Kiểm thử
 
-```powershell
-$env:PLATE_RECOGNIZER_TOKEN="..."
-$env:GEMINI_API_KEY="..."
-$env:OPENAI_API_KEY="sk-..."
-```
-
-Khuyen nghi neu muon dung Gemini de doi chieu: chon `Gemini Vision`, dung model `gemini-2.5-flash`, nhap `GEMINI_API_KEY`, roi bam `Luu API keys`. Neu tai khoan da co quota/billing cho Pro, co the doi sang `gemini-2.5-pro`.
-
-Neu can doi chieu them, co the thu `Plate Recognizer` cho bai toan bai xe/nhieu xe, `GPT Vision` neu ban da co OpenAI key, hoac `Local OCR`/Tesseract khi PaddleOCR gap anh kho.
-
-Tesseract là fallback tùy chọn. Trong Update Center, chọn **Cài đặt** để tải
-component Windows x64 đã được dự án build từ source Tesseract chính thức, kiểm
-SHA-256 archive/từng file, OCR smoke test và tự lưu path trong LocalAppData.
-Ứng dụng không yêu cầu PATH, quyền Administrator hoặc installer bên thứ ba.
-Khi PaddleOCR đọc rõ biển số, Tesseract không được gọi để tránh làm chậm batch.
-Xem [hướng dẫn component](docs/TESSERACT_COMPONENT_RELEASE.md) để biết quy
-trình phát hành và rollback.
-
-## Build exe
+Kiểm tra nhanh sau khi thiết lập môi trường:
 
 ```powershell
-.\build_exe.ps1
+.\.venv\Scripts\python.exe -B -m compileall -q check_vehicle_ocr tests tools main.py
+.\.venv\Scripts\python.exe -B tests\smoke_test.py
 ```
 
-File chạy mới chỉ nằm ở một chỗ:
+Bộ kiểm thử đầy đủ và các cổng kiểm tra phát hành được định nghĩa trong [CI](.github/workflows/ci.yml) và [Release Windows](.github/workflows/release.yml). Theo [báo cáo phát hành v1.9.3](docs/v1.9.3-ocr-subprocess-release-report.md), bản này đã pass compileall, 34/34 test scripts, packaged health, Paddle self-test, UI assertion và installer install/health/uninstall.
+
+Kiểm thử tự động không gọi API hoặc Telegram thật và không dùng dataset ảnh riêng tư.
+
+## Cấu trúc repository
 
 ```text
-release\CheckVehicleOCR\CheckVehicleOCR.exe
+.github/workflows/   CI và quy trình phát hành Windows
+assets/              Icon và fixture component
+check_vehicle_ocr/   Source ứng dụng
+docs/                Tài liệu kỹ thuật và báo cáo phát hành
+installer/           Cấu hình Inno Setup
+models/              Model metadata và weights qua Git LFS
+tests/               Automated tests và benchmark harness
+tools/               Công cụ build, kiểm tra và chụp UI
+main.py              Entry point khi chạy source
+build_*.ps1          Script build Windows
 ```
 
-Script build sẽ dọn các output cũ `dist`, `dist_release`, `build_release` để tránh nhầm bản exe cũ với bản mới.
+## Tài liệu
 
-## Build installer bang Inno Setup
+- [Latest Release](https://github.com/NovWyatt/checkparking/releases/latest)
+- [Changelog](CHANGELOG.md)
+- [Security Policy](SECURITY.md)
+- [Thiết lập AI provider](docs/AI_PROVIDER_SETUP.md)
+- [Hệ thống cập nhật](docs/UPDATE_SYSTEM.md)
+- [Tesseract component](docs/TESSERACT_COMPONENT_RELEASE.md)
+- [Báo cáo phát hành v1.9.3](docs/v1.9.3-ocr-subprocess-release-report.md)
+- [Báo cáo hiệu năng ảnh độ phân giải cao](docs/high-resolution-performance-fix-release-report.md)
 
-Can cai Inno Setup 6 truoc. Neu lenh `iscc` chua co trong PATH, script se tu tim o `C:\Program Files (x86)\Inno Setup 6\ISCC.exe`.
+## License
 
-```powershell
-.\build_installer.ps1
-```
-
-Installer se nam o:
-
-```text
-installer\Output\CheckVehicleOCR_Setup.exe
-```
-
-## Luu y do chinh xac
-
-Day la OCR tu dong nen ket qua phu thuoc nhieu vao anh: goc chup, anh rung, bien so bi che, anh qua toi/sang, bien so nho trong khung hinh. Sheet `Can_kiem_tra` duoc tao rieng de gom anh mo, OCR thap tin cay, hoac khong tim thay bien so.
+Mã nguồn riêng của repository được phát hành theo [MIT License](LICENSE). PaddleOCR, PaddlePaddle, Tesseract, model và các dependency khác giữ license/notice riêng; xem [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
