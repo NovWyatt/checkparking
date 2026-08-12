@@ -8,11 +8,11 @@
 
 Ứng dụng Windows giúp quét hàng loạt ảnh phương tiện, nhận diện biển số, kiểm tra kết quả và xuất Excel.
 
-**Phiên bản ổn định hiện tại:** v1.9.3
+**Phiên bản ổn định hiện tại:** v1.9.4
 
 [**⬇️ Tải bản mới nhất**](https://github.com/NovWyatt/checkparking/releases/latest)
 
-![Giao diện quét ảnh của Check Vehicle OCR v1.9.3](docs/images/check-vehicle-ocr-v1.9.3.png)
+![Giao diện quét ảnh của Check Vehicle OCR](docs/images/check-vehicle-ocr-v1.9.3.png)
 
 ## Tính năng chính
 

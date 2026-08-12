@@ -19,7 +19,7 @@ from check_vehicle_ocr.version import VERSION
 
 
 def main() -> int:
-    assert VERSION == "1.9.3"
+    assert VERSION == "1.9.4"
     with tempfile.TemporaryDirectory() as temporary:
         previous_appdata, previous_localappdata = os.environ.get("APPDATA"), os.environ.get("LOCALAPPDATA")
         os.environ["APPDATA"] = temporary

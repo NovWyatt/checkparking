@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.9.4 — Quét nhanh vẫn đọc biển rõ
+
+- Preset Ưu tiên tốc độ dùng PP-OCRv6 Tiny đúng như lựa chọn giao diện; Cân bằng tiếp tục dùng PP-OCRv6 Small.
+- FAST không còn bỏ qua ảnh khi crop detector thất bại: chạy một fallback toàn ảnh có giới hạn, sau đó chỉ thử tối đa hai vùng trung tâm xe khi vẫn chưa có biển hợp lệ.
+- Giữ early exit khi đã có biển rõ, nên rescue không làm chậm các ảnh đã nhận dạng thành công.
+- Thêm regression test cho fallback FAST và hai vùng center rescue; benchmark bộ 16 ảnh thực tế đạt 16/16 kết quả trong cả môi trường có và không có detector ONNX.
+
 ## 1.9.3 — Giao diện mượt hơn khi quét
 
 - Tách công việc nhận diện khỏi giao diện để giảm hiện tượng đứng hoặc khựng trong lúc PP-OCRv6 Small xử lý ảnh.

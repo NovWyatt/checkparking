@@ -93,7 +93,7 @@ def current_model_selection() -> tuple[str, str]:
     try:
         from .config import load_settings
 
-        if str(load_settings().get("performance_preset") or "").upper() == "LOW_MEMORY":
+        if str(load_settings().get("performance_preset") or "").upper() in {"FAST", "LOW_MEMORY"}:
             return PP_OCRV6_TINY.detection_model, PP_OCRV6_TINY.recognition_model
     except Exception:
         pass

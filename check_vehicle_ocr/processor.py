@@ -1167,12 +1167,12 @@ def process_image(
                 break
 
     # Full-scene OCR is a last resort for Paddle only. A plate-like crop below
-    # the confidence threshold is not considered a successful crop: BALANCED
-    # may make one bounded fallback attempt, while FAST still never does.
+    # the confidence threshold is not considered a successful crop: every mode
+    # may make one bounded fallback attempt when no detector crop is accepted.
     # Tesseract must never inspect a complete phone photo because overlays
     # dominate its output.
     has_sufficient_crop_candidate = any(is_early_exit(candidate) for candidate in accepted)
-    if not has_sufficient_crop_candidate and can_read_regions and scan_mode != "fast":
+    if not has_sufficient_crop_candidate and can_read_regions:
         metrics["full_scene_ocr_calls"] = int(metrics["full_scene_ocr_calls"]) + 1
         full_scene = PlateCandidate(bbox=(0, 0, width, height), score=0.0, source="full_scene_fallback")
         paddle_started = time.perf_counter()
@@ -1186,6 +1186,38 @@ def process_image(
                 source="full_scene_fallback",
                 bbox=(max(0, lx), max(0, ly), max(1, lw), max(1, lh)),
             )
+
+    if not accepted and can_read_regions:
+        for center_y_fraction, center_height_fraction in ((0.30, 0.28), (0.35, 0.30)):
+            if accepted:
+                break
+            center_width = max(1, round(width * 0.54))
+            center_height = max(1, round(height * center_height_fraction))
+            center_x = max(0, min(width - center_width, round(width * 0.23)))
+            center_y = max(0, min(height - center_height, round(height * center_y_fraction)))
+            center_crop = image_bgr[center_y : center_y + center_height, center_x : center_x + center_width]
+            if center_crop.size:
+                metrics["crop_ocr_calls"] = int(metrics["crop_ocr_calls"]) + 1
+                center_candidate = PlateCandidate(
+                    bbox=(center_x, center_y, center_width, center_height),
+                    score=0.0,
+                    source="center_rescue_fallback",
+                )
+                center_started = time.perf_counter()
+                center_attempts = region_reader(
+                    center_crop,
+                    detector_limit_side_len=960,
+                    detector_limit_type="max",
+                ) or []
+                _record_stage_ms(stage_timings, "paddle_total_ms", center_started)
+                for local_bbox, attempt in center_attempts:
+                    lx, ly, lw, lh = local_bbox
+                    record_attempt(
+                        center_candidate,
+                        attempt,
+                        source="center_rescue_fallback",
+                        bbox=(center_x + max(0, lx), center_y + max(0, ly), max(1, lw), max(1, lh)),
+                    )
 
     scoring_started = time.perf_counter()
     primary, discarded, selected_reason = choose_primary_candidates(

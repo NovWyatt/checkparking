@@ -8,7 +8,7 @@ embed their exact build date, commit and GitHub repository.
 
 from __future__ import annotations
 
-VERSION = "1.9.3"
+VERSION = "1.9.4"
 DEFAULT_GITHUB_REPOSITORY = "NovWyatt/checkparking"
 
 try:

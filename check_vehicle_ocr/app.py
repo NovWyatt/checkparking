@@ -2164,7 +2164,7 @@ class CheckVehicleApp(tk.Tk):
             self.local_ocr_workers_var.set(1)
             self.api_workers_var.set(min(4, max(1, self.cpu_count // 2)))
             self.queue_capacity_var.set(32)
-            self.performance_hint_var.set("Xử lý ảnh và yêu cầu AI song song trong giới hạn an toàn. PaddleOCR vẫn chạy một lượt để ổn định.")
+            self.performance_hint_var.set("Dùng PP-OCRv6 Tiny để ưu tiên tốc độ trên ảnh rõ. Chế độ Cân bằng dùng model Small để ổn định hơn.")
         else:
             self.worker_mode_var.set("AUTO")
             self.local_ocr_workers_var.set(1)

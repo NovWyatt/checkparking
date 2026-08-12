@@ -106,6 +106,48 @@ class _ShapePaddle:
         ]
 
 
+class _FastFallbackPaddle:
+    def read_plate_regions(self, crop):
+        height, width = crop.shape[:2]
+        if (width, height) == (220, 80):
+            return []
+        return [
+            (
+                (120, 80, 220, 80),
+                OcrAttempt(
+                    raw_text="59X112345",
+                    text="59X112345",
+                    normalized_text="59X112345",
+                    confidence=96.0,
+                    engine="paddleocr",
+                ),
+            )
+        ]
+
+
+class _FastCenterRescuePaddle:
+    def __init__(self) -> None:
+        self.calls: list[tuple[int, int, int | None, str | None]] = []
+
+    def read_plate_regions(self, crop, *, detector_limit_side_len=None, detector_limit_type=None):
+        height, width = crop.shape[:2]
+        self.calls.append((width, height, detector_limit_side_len, detector_limit_type))
+        if (width, height) == (518, 384) and detector_limit_side_len == 960 and detector_limit_type == "max":
+            return [
+                (
+                    (80, 60, 220, 80),
+                    OcrAttempt(
+                        raw_text="59U137185",
+                        text="59U137185",
+                        normalized_text="59U137185",
+                        confidence=96.0,
+                        engine="paddleocr",
+                    ),
+                )
+            ]
+        return []
+
+
 def _run_shape_case(root: Path, frame: np.ndarray, image_path: Path, mode: str):
     detector = _ShapeDetector()
     engine = _ShapePaddle()
@@ -170,6 +212,62 @@ def main() -> int:
         assert stage_timings["paddle_total_ms"] >= 1.0
         assert stage_timings["total_ms"] >= stage_timings["detector_ms"]
         assert all(value >= 0 for value in stage_timings.values())
+
+        previous = processor.detect_plate_candidates_onnx
+        processor.detect_plate_candidates_onnx = lambda *_args, **_kwargs: [
+            PlateCandidate(
+                bbox=(120, 80, 220, 80),
+                score=95.0,
+                detector_confidence=95.0,
+                source="test-detector",
+            )
+        ]
+        try:
+            fast_rescue = processor.process_image(
+                image_path,
+                root / "fast_rescue_crops",
+                _FastFallbackPaddle(),
+                blur_threshold=0,
+                confidence_threshold=70,
+                paddle_scan_mode="fast",
+                image_bgr=np.full((520, 900, 3), 210, dtype=np.uint8),
+                image_size=(900, 520),
+                selected_plate_type=PlateType.MOTORCYCLE,
+            )
+        finally:
+            processor.detect_plate_candidates_onnx = previous
+
+        assert fast_rescue.status == "OK"
+        assert fast_rescue.primary_plate is not None
+        assert fast_rescue.primary_plate.normalized_text == "59X112345"
+        assert fast_rescue.pipeline_metrics["full_scene_ocr_calls"] == 1
+
+        previous = processor.detect_plate_candidates_onnx
+        processor.detect_plate_candidates_onnx = lambda *_args, **_kwargs: []
+        center_engine = _FastCenterRescuePaddle()
+        try:
+            fast_center_rescue = processor.process_image(
+                image_path,
+                root / "fast_center_rescue_crops",
+                center_engine,
+                blur_threshold=0,
+                confidence_threshold=70,
+                paddle_scan_mode="fast",
+                image_bgr=np.full((1280, 960, 3), 210, dtype=np.uint8),
+                image_size=(960, 1280),
+                selected_plate_type=PlateType.MOTORCYCLE,
+            )
+        finally:
+            processor.detect_plate_candidates_onnx = previous
+
+        assert fast_center_rescue.status == "OK"
+        assert fast_center_rescue.primary_plate is not None
+        assert fast_center_rescue.primary_plate.normalized_text == "59U137185"
+        assert center_engine.calls == [
+            (960, 1280, None, None),
+            (518, 358, 960, "max"),
+            (518, 384, 960, "max"),
+        ]
 
         large_frame = np.full((2560, 1920, 3), 210, dtype=np.uint8)
         for mode in ("fast", "balanced"):
