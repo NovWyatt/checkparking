@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.9.5 — Fast Adaptive Verify
+
+- Chế độ FAST vẫn quét bằng PP-OCRv6 Tiny, nhưng tự xác minh đúng một crop bằng PP-OCRv6 Small khi Tiny trả về chuỗi giống biển số nhưng không khớp bất kỳ cấu trúc biển Việt Nam chuẩn nào.
+- Predictor Small chỉ được tạo khi thật sự gặp kết quả bất thường; ảnh có biển số rõ giữ nguyên đường xử lý Tiny và early exit.
+- Trên bộ 16 ảnh xe máy có nhãn được đối chiếu thủ công, FAST tăng từ 15/16 lên 16/16 exact match; tốc độ giảm có kiểm soát từ 75,12 xuống 65,55 ảnh/phút do chỉ một ảnh cần xác minh.
+- Thêm regression test cho việc Tiny bị lỗi định dạng được Small sửa lại và cho số lần xác minh bị giới hạn.
+
 ## 1.9.4 — Quét nhanh vẫn đọc biển rõ
 
 - Preset Ưu tiên tốc độ dùng PP-OCRv6 Tiny đúng như lựa chọn giao diện; Cân bằng tiếp tục dùng PP-OCRv6 Small.

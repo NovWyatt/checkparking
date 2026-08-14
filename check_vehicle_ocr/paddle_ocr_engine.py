@@ -10,7 +10,12 @@ import cv2
 import numpy as np
 
 from .models import OcrAttempt
-from .ocr_models import DEFAULT_MODEL_PROFILE, current_model_selection as _current_model_selection
+from .ocr_models import (
+    DEFAULT_MODEL_PROFILE,
+    PP_OCRV6_SMALL,
+    PP_OCRV6_TINY,
+    current_model_selection as _current_model_selection,
+)
 from .ocr import format_vietnam_plate, is_timestamp_like, looks_like_plate, normalize_plate_text, plate_quality_score
 from .plate_selection import is_plate_like_candidate
 
@@ -29,6 +34,8 @@ except Exception:
 _PADDLE_LOCK = threading.Lock()
 _PADDLE_OCR: Any | None = None
 _PADDLE_INIT_ERROR = ""
+_PADDLE_FAST_VERIFICATION_OCR: Any | None = None
+_PADDLE_FAST_VERIFICATION_INIT_ERROR = ""
 # PP-OCRv6 Small passed the project synthetic staging checks on Windows CPU.
 # The versioned model registry can explicitly select Tiny, Medium or the
 # retained PP-OCRv5 pair for a subsequent launch without changing this default.
@@ -138,6 +145,27 @@ class PaddleOcrEngine:
             output[source_index] = _region_attempts_from_result([result])
         return output
 
+    def read_plate_regions_fast_verification(
+        self,
+        crop_bgr: np.ndarray,
+    ) -> list[tuple[tuple[int, int, int, int], OcrAttempt]]:
+        """Verify one malformed Tiny result with Small, lazily and locally.
+
+        The regular FAST path remains Tiny-only.  This method is called only
+        for a detector crop that produced a plate-like but non-standard result.
+        """
+
+        if PaddleOCR is None or crop_bgr.size == 0:
+            return []
+        if _selected_model_names() != (PP_OCRV6_TINY.detection_model, PP_OCRV6_TINY.recognition_model):
+            return []
+        try:
+            ocr = _get_fast_verification_ocr()
+            result = ocr.predict(cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2RGB))
+        except Exception:
+            return []
+        return _region_attempts_from_result(result)
+
 
 def _get_ocr():
     global _PADDLE_OCR, _PADDLE_INIT_ERROR
@@ -174,6 +202,30 @@ def _get_ocr():
             _PADDLE_INIT_ERROR = str(exc)
             raise
     return _PADDLE_OCR
+
+
+def _get_fast_verification_ocr():
+    """Create the PP-OCRv6 Small verifier only after an anomalous Tiny read."""
+
+    global _PADDLE_FAST_VERIFICATION_OCR, _PADDLE_FAST_VERIFICATION_INIT_ERROR
+    if _PADDLE_FAST_VERIFICATION_OCR is not None:
+        return _PADDLE_FAST_VERIFICATION_OCR
+    if _PADDLE_FAST_VERIFICATION_INIT_ERROR:
+        raise RuntimeError(_PADDLE_FAST_VERIFICATION_INIT_ERROR)
+
+    with _PADDLE_LOCK:
+        if _PADDLE_FAST_VERIFICATION_OCR is not None:
+            return _PADDLE_FAST_VERIFICATION_OCR
+        try:
+            _PADDLE_FAST_VERIFICATION_OCR = _create_ocr(
+                _bundled_model_dirs(PP_OCRV6_SMALL.detection_model, PP_OCRV6_SMALL.recognition_model),
+                PP_OCRV6_SMALL.detection_model,
+                PP_OCRV6_SMALL.recognition_model,
+            )
+        except Exception as exc:
+            _PADDLE_FAST_VERIFICATION_INIT_ERROR = str(exc)
+            raise
+    return _PADDLE_FAST_VERIFICATION_OCR
 
 
 def _create_ocr(model_dirs: dict[str, str], detection_model: str = _TEXT_DETECTION_MODEL_NAME, recognition_model: str = _TEXT_RECOGNITION_MODEL_NAME):

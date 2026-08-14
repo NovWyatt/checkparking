@@ -82,6 +82,21 @@ def clean_plate_for_formatting(text: object) -> str:
     return "".join(character for character in upper if "A" <= character <= "Z" or "0" <= character <= "9")
 
 
+def has_standard_vietnam_plate_shape(text: object) -> bool:
+    """Return whether OCR text matches a supported standard plate shape.
+
+    This validates OCR output only.  It never substitutes ambiguous glyphs or
+    changes the operator-selected formatting policy.
+    """
+
+    cleaned = clean_plate_for_formatting(text)
+    return bool(
+        _MOTORCYCLE_LETTER_DIGIT.fullmatch(cleaned)
+        or _MOTORCYCLE_TWO_LETTERS.fullmatch(cleaned)
+        or _CAR_STANDARD.fullmatch(cleaned)
+    )
+
+
 def format_motorcycle_plate(text: object) -> PlateFormatResult:
     """Format only the two approved motorcycle patterns."""
 

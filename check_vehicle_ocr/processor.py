@@ -12,7 +12,7 @@ from .image_io import load_image, save_crop
 from .models import ExpectedPlateCount, ImageResult, PlateCandidate, coerce_expected_plate_count
 from .ocr import TesseractOcrEngine, is_timestamp_like, looks_like_plate, plate_text_metadata
 from .plate_detector import detect_plate_candidates_onnx, onnx_detector_error
-from .plate_formatting import PlateFormatStatus, PlateType, coerce_plate_type
+from .plate_formatting import PlateFormatStatus, PlateType, coerce_plate_type, has_standard_vietnam_plate_shape
 from .plate_selection import assess_plate_candidate, choose_primary_candidates
 
 
@@ -1041,6 +1041,7 @@ def process_image(
         "detector_calls": 0,
         "crop_ocr_calls": 0,
         "full_scene_ocr_calls": 0,
+        "small_verification_ocr_calls": 0,
         "tesseract_calls": 0,
         "ai_calls": 0,
         "candidates_before_filter": 0,
@@ -1053,6 +1054,7 @@ def process_image(
     detector_candidates = _detector_first_regions(image_bgr, scan_mode, metrics, stage_timings=stage_timings)
     crop_limit = 2 if scan_mode == "fast" else (3 if scan_mode == "balanced" else 6)
     region_reader = getattr(ocr_engine, "read_plate_regions", None)
+    fast_verification_reader = getattr(ocr_engine, "read_plate_regions_fast_verification", None)
     variant_reader = getattr(ocr_engine, "read_plate_variants", None)
     can_read_regions = callable(region_reader)
 
@@ -1140,6 +1142,30 @@ def process_image(
                     detector_candidate,
                     attempt,
                     source=f"detector_crop:{detector_candidate.source}",
+                    crop_path=crop_path,
+                )
+                if candidate.readable:
+                    crop_accepted.append(candidate)
+
+        # Tiny is normally much faster than Small.  If it returns a plausible
+        # plate that cannot match any supported Vietnamese plate shape, let a
+        # lazily-created Small predictor inspect the same detector crop once.
+        # The normal FAST early-exit path is untouched.
+        if (
+            scan_mode == "fast"
+            and crop_accepted
+            and not any(has_standard_vietnam_plate_shape(candidate.raw_text or candidate.text) for candidate in crop_accepted)
+            and callable(fast_verification_reader)
+        ):
+            metrics["small_verification_ocr_calls"] = int(metrics["small_verification_ocr_calls"]) + 1
+            verification_started = time.perf_counter()
+            verification_attempts = fast_verification_reader(crop) or []
+            _record_stage_ms(stage_timings, "paddle_total_ms", verification_started)
+            for _local_bbox, attempt in verification_attempts:
+                candidate = record_attempt(
+                    detector_candidate,
+                    attempt,
+                    source=f"detector_crop_verified_small:{detector_candidate.source}",
                     crop_path=crop_path,
                 )
                 if candidate.readable:

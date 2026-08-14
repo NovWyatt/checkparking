@@ -8,7 +8,7 @@
 
 Ứng dụng Windows giúp quét hàng loạt ảnh phương tiện, nhận diện biển số, kiểm tra kết quả và xuất Excel.
 
-**Phiên bản ổn định hiện tại:** v1.9.4
+**Phiên bản ổn định hiện tại:** v1.9.5
 
 [**⬇️ Tải bản mới nhất**](https://github.com/NovWyatt/checkparking/releases/latest)
 
@@ -27,6 +27,7 @@
 
 - PaddleOCR 3.7.0, PaddlePaddle 3.3.1 và PaddleX 3.7.2.
 - PP-OCRv6 Small là model mặc định; PP-OCRv5 được giữ để quay lại khi cần.
+- FAST dùng PP-OCRv6 Tiny; chỉ kết quả có cấu trúc bất thường mới được xác minh một lần bằng PP-OCRv6 Small trên cùng crop biển số.
 - Hoạt động trên máy, không cần API key và không cần gửi ảnh ra ngoài.
 - PaddleOCR chạy tách biệt khỏi giao diện, với một model được khởi tạo và giữ trong suốt batch.
 
