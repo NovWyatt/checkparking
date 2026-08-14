@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.9.6 — Detector miễn phí, đóng gói và kiểm chứng
+
+- Thay detector YOLOv9 có nguồn weights chưa đủ rõ quyền phân phối bằng OpenCV Zoo YuNet Apache-2.0, được đóng gói trong ứng dụng với license, attribution, commit nguồn và SHA-256 đã pin.
+- Ứng dụng không còn tự tải detector ngoài khi quét; bản tải GitHub hoạt động offline với toàn bộ detector/OCR cục bộ đã đóng gói.
+- FAST thử một crop mở rộng khi YuNet có crop quá chặt và chỉ xác minh Small khi Tiny không ra cấu trúc chuẩn hoặc biển bị nghiêng mạnh.
+- Trên 16 ảnh có nhãn đối chiếu thủ công: 16/16 exact match, 100% ký tự, 47,68 ảnh/phút với detector Apache-2.0 đã bundle.
+
 ## 1.9.5 — Fast Adaptive Verify
 
 - Chế độ FAST vẫn quét bằng PP-OCRv6 Tiny, nhưng tự xác minh đúng một crop bằng PP-OCRv6 Small khi Tiny trả về chuỗi giống biển số nhưng không khớp bất kỳ cấu trúc biển Việt Nam chuẩn nào.

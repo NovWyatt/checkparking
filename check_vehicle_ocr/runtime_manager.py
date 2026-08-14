@@ -70,7 +70,6 @@ class PaddleRuntimeManager:
                 "pytesseract>=0.3.10",
                 "openai>=2.0",
                 "packaging>=23.2",
-                "open-image-models[onnx]==0.5.1",
             ),
             (str(python_path), "-c", "import paddle, paddleocr; print(paddle.__version__, paddleocr.__version__)"),
             (str(python_path), str(self.project_root / "main.py"), "--self-test-paddle"),
@@ -109,7 +108,6 @@ class PaddleRuntimeManager:
             **os.environ,
             "PYTHONPATH": str(self.project_root) + (os.pathsep + os.environ["PYTHONPATH"] if os.environ.get("PYTHONPATH") else ""),
             "PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK": "True",
-            "CHECK_VEHICLE_DISABLE_ONNX_DETECTOR": "1",
             "PIP_DISABLE_PIP_VERSION_CHECK": "1",
         }
         try:

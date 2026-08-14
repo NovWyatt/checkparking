@@ -19,7 +19,7 @@ from check_vehicle_ocr.models import ImageResult, OcrAttempt, PlateCandidate
 from check_vehicle_ocr.plate_formatting import PlateType
 from check_vehicle_ocr.ocr import TesseractOcrEngine, find_tesseract, is_timestamp_like, looks_like_plate
 from check_vehicle_ocr.paddle_ocr_engine import PaddleOcrEngine
-from check_vehicle_ocr import plate_detector as plate_detector_module
+from check_vehicle_ocr.opencv_yunet_detector import bundled_yunet_model_path, detect_plate_candidates_yunet
 from check_vehicle_ocr.processor import process_image
 from check_vehicle_ocr.app import _merge_gemini_local_result, _needs_local_fallback
 
@@ -186,23 +186,10 @@ def main() -> int:
         if looks_like_plate("51-X5 10:27"):
             raise AssertionError("Bien so ghep voi gio tren time mark bi xem nham la bien so")
 
-        old_detector = plate_detector_module._DETECTOR
-        old_attempted = plate_detector_module._DETECTOR_ATTEMPTED
-        try:
-            plate_detector_module._DETECTOR = FakePlateDetector()
-            plate_detector_module._DETECTOR_ATTEMPTED = True
-            onnx_candidates = plate_detector_module.detect_plate_candidates_onnx(
-                image_bgr=np.zeros((520, 900, 3), dtype=np.uint8),
-                max_candidates=4,
-                confidence_threshold=0.25,
-            )
-            if len(onnx_candidates) != 1 or onnx_candidates[0].source != "onnx_plate_detector":
-                raise AssertionError(f"ONNX detector adapter khong tao/dedupe dung candidate: {onnx_candidates}")
-            if onnx_candidates[0].bbox[0] >= 300 or onnx_candidates[0].bbox[1] >= 250:
-                raise AssertionError("ONNX detector adapter khong padding crop bien so")
-        finally:
-            plate_detector_module._DETECTOR = old_detector
-            plate_detector_module._DETECTOR_ATTEMPTED = old_attempted
+        if bundled_yunet_model_path() is None:
+            raise AssertionError("Model detector YuNet khong duoc bundle")
+        if detect_plate_candidates_yunet(np.zeros((520, 900, 3), dtype=np.uint8), confidence_threshold=1.1):
+            raise AssertionError("Detector YuNet tra candidate khong hop le tren anh den")
 
         crop_dir = root / "crops"
         result = process_image(image_path, crop_dir, FakeOcrEngine(), blur_threshold=10, confidence_threshold=45)

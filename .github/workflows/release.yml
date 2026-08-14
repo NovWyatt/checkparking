@@ -19,7 +19,6 @@ jobs:
       PYTHONNOUSERSITE: "1"
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
       PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK: "True"
-      CHECK_VEHICLE_DISABLE_ONNX_DETECTOR: "1"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -50,7 +49,7 @@ jobs:
             'tests\release_system_test.py', 'tests\update_actions_control_test.py',
             'tests\plate_formatting_test.py', 'tests\hybrid_progress_policy_test.py',
             'tests\hybrid_pipeline_test.py', 'tests\false_positive_regression_test.py',
-            'tests\performance_timing_instrumentation_test.py', 'tests\release_v180_test.py',
+            'tests\performance_timing_instrumentation_test.py', 'tests\opencv_yunet_detector_test.py', 'tests\release_v180_test.py',
             'tests\scrollable_frame_test.py', 'tests\v190_tesseract_component_test.py',
             'tests\v190_candidate_scoring_test.py', 'tests\v190_runtime_version_test.py',
             'tests\ocr_process_worker_test.py', 'tests\ocr_process_app_integration_test.py',

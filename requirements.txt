@@ -2,7 +2,6 @@ numpy==2.3.5
 openai==2.49.0
 opencv-python==5.0.0.93
 openpyxl==3.1.5
-open-image-models[onnx]==0.5.1
 packaging==26.2
 paddleocr==3.7.0
 paddlepaddle==3.3.1

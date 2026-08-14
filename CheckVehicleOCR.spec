@@ -10,8 +10,7 @@ block_cipher = None
 project_root = Path(SPECPATH)
 vendor_tesseract = project_root / "vendor" / "tesseract"
 paddle_libs = Path(paddle.__file__).resolve().parent / "libs"
-onnx_plate_model_name = "yolo-v9-t-384-license-plate-end2end"
-onnx_plate_model_file = "yolo-v9-t-384-license-plates-end2end.onnx"
+yunet_model_dir = project_root / "models" / "opencv_yunet"
 paddleocr_model_names = (
     "PP-OCRv6_small_det",
     "PP-OCRv6_small_rec",
@@ -43,7 +42,6 @@ def collect_dynamic_libs_optional(package_name):
         return []
 
 
-binaries += collect_dynamic_libs_optional("onnxruntime")
 datas = collect_data_files("paddlex") + collect_data_files("paddleocr")
 model_manifest = project_root / "models" / "manifest.json"
 if model_manifest.is_file():
@@ -64,26 +62,14 @@ for model_name in paddleocr_model_names:
         runtime_file = model_dir / runtime_file_name
         if runtime_file.is_file():
             datas.append((str(runtime_file), f"models/paddleocr/{model_name}"))
-for detector_model_path in (
-    Path.home()
-    / "AppData"
-    / "Local"
-    / "CheckVehicleOCR"
-    / "models"
-    / "open-image-models"
-    / onnx_plate_model_name
-    / onnx_plate_model_file,
-    Path.home() / ".cache" / "open-image-models" / onnx_plate_model_name / onnx_plate_model_file,
-):
-    if detector_model_path.exists():
-        datas.append((str(detector_model_path), f"models/open-image-models/{onnx_plate_model_name}"))
-        break
+if yunet_model_dir.is_dir():
+    for detector_asset in yunet_model_dir.iterdir():
+        if detector_asset.is_file():
+            datas.append((str(detector_asset), "models/opencv_yunet"))
 for package_name in (
     "paddlex",
     "paddleocr",
     "paddlepaddle",
-    "open-image-models",
-    "onnxruntime",
     "imagesize",
     "opencv-contrib-python",
     "opencv-python-headless",
@@ -114,7 +100,7 @@ a = Analysis(
     pathex=[str(project_root)],
     binaries=binaries,
     datas=datas,
-    hiddenimports=["pillow_heif", "open_image_models", "onnxruntime"],
+    hiddenimports=["pillow_heif"],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

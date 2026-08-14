@@ -8,7 +8,7 @@
 
 Ứng dụng Windows giúp quét hàng loạt ảnh phương tiện, nhận diện biển số, kiểm tra kết quả và xuất Excel.
 
-**Phiên bản ổn định hiện tại:** v1.9.5
+**Phiên bản ổn định hiện tại:** v1.9.6
 
 [**⬇️ Tải bản mới nhất**](https://github.com/NovWyatt/checkparking/releases/latest)
 
@@ -33,7 +33,7 @@
 
 ### Phát hiện vùng biển số
 
-- ONNX license-plate detector ưu tiên tìm vùng biển trước khi OCR.
+- Detector YuNet từ OpenCV Zoo (Apache-2.0) được đóng gói cùng ứng dụng, không cần tải model ngoài khi quét.
 - Pipeline detector-first giúp hạn chế timestamp, watermark, địa chỉ và chữ ngoài biển số.
 - Candidate được lọc, chấm điểm và định dạng trước khi chọn kết quả chính.
 - Ảnh khó vẫn có bước dự phòng có giới hạn; OCR toàn cảnh không chạy sau khi đã có crop biển hợp lệ.
@@ -102,7 +102,7 @@ Chuỗi vẫn có cấu trúc giống biển số nhưng không khớp mẫu chu
 
 ## OCR cục bộ và AI tùy chọn
 
-**Cục bộ — Khuyên dùng** chạy PP-OCRv6 Small hoàn toàn trên máy. ONNX detector tìm vùng biển số trước, sau đó PaddleOCR đọc crop và chọn candidate phù hợp nhất.
+**Cục bộ — Khuyên dùng** chạy PP-OCRv6 Small hoàn toàn trên máy. Detector YuNet tìm vùng biển số trước, sau đó PaddleOCR đọc crop và chọn candidate phù hợp nhất.
 
 **Cục bộ + AI kiểm tra ảnh khó** vẫn chạy PaddleOCR trước. Theo chính sách mặc định, AI chỉ nhận ảnh khi kết quả chính không đọc được, có độ tin cậy thấp hoặc thực sự cần kiểm tra; candidate nhiễu đã bị loại không kích hoạt AI.
 
