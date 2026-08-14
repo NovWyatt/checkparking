@@ -309,7 +309,7 @@ def _legacy_process_image(
         )
         detector_error = onnx_detector_error()
         if detector_error:
-            warnings.append(f"Không dùng được ONNX detector; tiếp tục OCR fallback: {detector_error}")
+            warnings.append(f"Không dùng được detector biển số; tiếp tục OCR fallback: {detector_error}")
         scene_candidates = [PlateCandidate(bbox=(0, 0, width, height), score=14.0, source="fallback_full_scene")]
         fallback_pool = fallback_candidates(image_bgr)[:1]
         if detector_candidates:
@@ -474,8 +474,8 @@ def _legacy_process_image(
                 confidence_threshold=_onnx_detector_confidence(paddle_mode),
             )
             detector_error = onnx_detector_error()
-            if detector_error and not any("ONNX detector" in warning for warning in warnings):
-                warnings.append(f"Không dùng được ONNX detector; tiếp tục OCR fallback: {detector_error}")
+            if detector_error and not any("detector biển số" in warning for warning in warnings):
+                warnings.append(f"Không dùng được detector biển số; tiếp tục OCR fallback: {detector_error}")
             onnx_prepared = [
                 prepared
                 for index, candidate in enumerate(detector_candidates, start=onnx_offset)
@@ -639,6 +639,20 @@ def _legacy_process_image(
 
 def _safe_stem(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "_", value).strip("._") or "image"
+
+
+def _expanded_detector_crop(image_bgr: np.ndarray, bbox: tuple[int, int, int, int]) -> np.ndarray:
+    """Return one modestly larger crop for a failed compact detector crop."""
+
+    image_height, image_width = image_bgr.shape[:2]
+    x, y, width, height = bbox
+    pad_x = max(3, round(width * 0.11))
+    pad_y = max(3, round(height * 0.12))
+    left = max(0, x - pad_x)
+    top = max(0, y - pad_y)
+    right = min(image_width, x + width + pad_x)
+    bottom = min(image_height, y + height + pad_y)
+    return image_bgr[top:bottom, left:right]
 
 
 def _path_hash(path: Path) -> str:
@@ -1147,29 +1161,6 @@ def process_image(
                 if candidate.readable:
                     crop_accepted.append(candidate)
 
-        # Tiny is normally much faster than Small.  If it returns a plausible
-        # plate that cannot match any supported Vietnamese plate shape, let a
-        # lazily-created Small predictor inspect the same detector crop once.
-        # The normal FAST early-exit path is untouched.
-        if (
-            scan_mode == "fast"
-            and crop_accepted
-            and not any(has_standard_vietnam_plate_shape(candidate.raw_text or candidate.text) for candidate in crop_accepted)
-            and callable(fast_verification_reader)
-        ):
-            metrics["small_verification_ocr_calls"] = int(metrics["small_verification_ocr_calls"]) + 1
-            verification_started = time.perf_counter()
-            verification_attempts = fast_verification_reader(crop) or []
-            _record_stage_ms(stage_timings, "paddle_total_ms", verification_started)
-            for _local_bbox, attempt in verification_attempts:
-                candidate = record_attempt(
-                    detector_candidate,
-                    attempt,
-                    source=f"detector_crop_verified_small:{detector_candidate.source}",
-                    crop_path=crop_path,
-                )
-                if candidate.readable:
-                    crop_accepted.append(candidate)
         single_reader = getattr(ocr_engine, "read_plate", None)
         if not crop_accepted and (callable(variant_reader) or callable(single_reader)):
             metrics["crop_ocr_calls"] = int(metrics["crop_ocr_calls"]) + 1
@@ -1186,6 +1177,62 @@ def process_image(
             )
             if candidate.readable:
                 crop_accepted.append(candidate)
+
+        # YuNet's compact detector can make a slightly tight crop on a
+        # strongly lit or partially occluded plate.  Retry one larger crop
+        # only when Tiny has not produced any standard plate shape yet.
+        if (
+            scan_mode == "fast"
+            and crop_accepted
+            and not any(has_standard_vietnam_plate_shape(candidate.raw_text or candidate.text) for candidate in crop_accepted)
+            and detector_candidate.source.startswith("opencv_yunet_plate")
+            and can_read_regions
+        ):
+            expanded_crop = _expanded_detector_crop(image_bgr, detector_candidate.bbox)
+            if expanded_crop.size and expanded_crop.shape != crop.shape:
+                metrics["crop_ocr_calls"] = int(metrics["crop_ocr_calls"]) + 1
+                expanded_started = time.perf_counter()
+                expanded_attempts = region_reader(expanded_crop) or []
+                _record_stage_ms(stage_timings, "paddle_total_ms", expanded_started)
+                for _local_bbox, attempt in expanded_attempts:
+                    candidate = record_attempt(
+                        detector_candidate,
+                        attempt,
+                        source=f"detector_crop_expanded:{detector_candidate.source}",
+                        crop_path=crop_path,
+                    )
+                    if candidate.readable:
+                        crop_accepted.append(candidate)
+
+        # Tiny is normally much faster than Small.  Verify one crop only if
+        # Tiny cannot produce a standard Vietnamese plate shape, or when the
+        # bundled YuNet detector marks the plate as strongly rotated.  The
+        # latter condition prevents a high-confidence Tiny misread from
+        # suppressing the more robust Small verifier.
+        if (
+            scan_mode == "fast"
+            and crop_accepted
+            and callable(fast_verification_reader)
+            and (
+                not any(has_standard_vietnam_plate_shape(candidate.raw_text or candidate.text) for candidate in crop_accepted)
+                or detector_candidate.source.endswith("_high_rotation")
+            )
+        ):
+            metrics["small_verification_ocr_calls"] = int(metrics["small_verification_ocr_calls"]) + 1
+            verification_started = time.perf_counter()
+            verification_attempts = fast_verification_reader(crop) or []
+            _record_stage_ms(stage_timings, "paddle_total_ms", verification_started)
+            for _local_bbox, attempt in verification_attempts:
+                candidate = record_attempt(
+                    detector_candidate,
+                    attempt,
+                    source=f"detector_crop_verified_small:{detector_candidate.source}",
+                    crop_path=crop_path,
+                )
+                if candidate.readable:
+                    candidate.selection_score += 0.01
+                    candidate.score = candidate.selection_score
+                    crop_accepted.append(candidate)
 
         if expected_count is ExpectedPlateCount.ONE and crop_accepted:
             best_crop = max(crop_accepted, key=lambda item: item.selection_score)

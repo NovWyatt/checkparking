@@ -144,6 +144,8 @@ def test_pyinstaller_model_bundle_excludes_local_cache() -> None:
     assert "paddleocr_model_runtime_files" in spec
     assert "datas.append((str(model_dir)" not in spec
     assert '"inference.pdiparams"' in spec
+    assert "yunet_model_dir" in spec
+    assert "open-image-models" not in spec
 
 
 def test_windows_executable_version_resource() -> None:

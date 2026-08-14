@@ -182,6 +182,63 @@ class _FastVerificationPaddle:
         ]
 
 
+class _FastExpandedCropPaddle:
+    def __init__(self) -> None:
+        self.calls: list[tuple[int, int]] = []
+
+    def read_plate_regions(self, crop):
+        height, width = crop.shape[:2]
+        self.calls.append((width, height))
+        expanded = (width, height) == (268, 100)
+        raw = "59U137185" if expanded else "59U11137185"
+        return [
+            (
+                (0, 0, width, height),
+                OcrAttempt(
+                    raw_text=raw,
+                    text=raw,
+                    normalized_text=raw,
+                    confidence=96.0 if expanded else 75.0,
+                    engine="paddleocr",
+                ),
+            )
+        ]
+
+
+class _FastHighRotationVerificationPaddle:
+    def __init__(self) -> None:
+        self.verification_calls = 0
+
+    def read_plate_regions(self, _crop):
+        return [
+            (
+                (0, 0, 220, 80),
+                OcrAttempt(
+                    raw_text="59C301122",
+                    text="59C301122",
+                    normalized_text="59C301122",
+                    confidence=99.0,
+                    engine="paddleocr",
+                ),
+            )
+        ]
+
+    def read_plate_regions_fast_verification(self, _crop):
+        self.verification_calls += 1
+        return [
+            (
+                (0, 0, 220, 80),
+                OcrAttempt(
+                    raw_text="59C304122",
+                    text="59C304122",
+                    normalized_text="59C304122",
+                    confidence=99.0,
+                    engine="paddleocr-small-verification",
+                ),
+            )
+        ]
+
+
 def _run_shape_case(root: Path, frame: np.ndarray, image_path: Path, mode: str):
     detector = _ShapeDetector()
     engine = _ShapePaddle()
@@ -333,6 +390,66 @@ def main() -> int:
         assert fast_verification.primary_plate.normalized_text == "76G125509"
         assert verification_engine.verification_calls == 1
         assert fast_verification.pipeline_metrics["small_verification_ocr_calls"] == 1
+
+        previous = processor.detect_plate_candidates_onnx
+        processor.detect_plate_candidates_onnx = lambda *_args, **_kwargs: [
+            PlateCandidate(
+                bbox=(40, 30, 220, 80),
+                score=95.0,
+                detector_confidence=95.0,
+                source="opencv_yunet_plate",
+            )
+        ]
+        expanded_engine = _FastExpandedCropPaddle()
+        try:
+            fast_expanded_crop = processor.process_image(
+                image_path,
+                root / "fast_expanded_crop",
+                expanded_engine,
+                blur_threshold=0,
+                confidence_threshold=70,
+                paddle_scan_mode="fast",
+                image_bgr=np.full((180, 320, 3), 210, dtype=np.uint8),
+                image_size=(320, 180),
+                selected_plate_type=PlateType.NONE,
+            )
+        finally:
+            processor.detect_plate_candidates_onnx = previous
+
+        assert fast_expanded_crop.primary_plate is not None
+        assert fast_expanded_crop.primary_plate.normalized_text == "59U137185"
+        assert expanded_engine.calls == [(220, 80), (268, 100)]
+        assert fast_expanded_crop.pipeline_metrics["small_verification_ocr_calls"] == 0
+
+        previous = processor.detect_plate_candidates_onnx
+        processor.detect_plate_candidates_onnx = lambda *_args, **_kwargs: [
+            PlateCandidate(
+                bbox=(40, 30, 220, 80),
+                score=95.0,
+                detector_confidence=95.0,
+                source="opencv_yunet_plate_high_rotation",
+            )
+        ]
+        high_rotation_engine = _FastHighRotationVerificationPaddle()
+        try:
+            high_rotation = processor.process_image(
+                image_path,
+                root / "fast_high_rotation",
+                high_rotation_engine,
+                blur_threshold=0,
+                confidence_threshold=70,
+                paddle_scan_mode="fast",
+                image_bgr=np.full((180, 320, 3), 210, dtype=np.uint8),
+                image_size=(320, 180),
+                selected_plate_type=PlateType.NONE,
+            )
+        finally:
+            processor.detect_plate_candidates_onnx = previous
+
+        assert high_rotation.primary_plate is not None
+        assert high_rotation.primary_plate.normalized_text == "59C304122"
+        assert high_rotation_engine.verification_calls == 1
+        assert high_rotation.pipeline_metrics["small_verification_ocr_calls"] == 1
 
         large_frame = np.full((2560, 1920, 3), 210, dtype=np.uint8)
         for mode in ("fast", "balanced"):

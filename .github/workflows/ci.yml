@@ -17,7 +17,6 @@ jobs:
       PYTHONNOUSERSITE: "1"
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
       PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK: "True"
-      CHECK_VEHICLE_DISABLE_ONNX_DETECTOR: "1"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -40,6 +39,8 @@ jobs:
         run: .\.venv\Scripts\python.exe -B tests\performance_stability_test.py
       - name: High-resolution performance invariants
         run: .\.venv\Scripts\python.exe -B tests\performance_timing_instrumentation_test.py
+      - name: Bundled YuNet detector test
+        run: .\.venv\Scripts\python.exe -B tests\opencv_yunet_detector_test.py
       - name: Progress-state test
         run: .\.venv\Scripts\python.exe -B tests\progress_state_test.py
       - name: Services test
