@@ -7,7 +7,8 @@ Tăng khả năng xem ảnh gốc tại Kết quả và cố định quy tắc n
 ## File thay đổi
 
 - `check_vehicle_ocr/ui/pages/results_page.py`: tăng vùng ảnh, chia phần chi tiết thành hai vùng kéo được và vẫn giữ ô sửa biển số.
-- `check_vehicle_ocr/app.py`: ảnh gốc tự co theo vùng xem sau khi người dùng kéo thanh chia; crop biển số có kích thước phù hợp vùng phụ.
+- `check_vehicle_ocr/app.py`: ảnh gốc tự co theo vùng xem sau khi người dùng kéo thanh chia; crop biển số có kích thước phù hợp vùng phụ và được tạo trực tiếp từ ảnh gốc khi pipeline không lưu file crop.
+- `check_vehicle_ocr/results_import.py`: khi mở lại Excel do ứng dụng xuất, ghép an toàn đường dẫn crop từ `Bien_so_doc_duoc` theo ảnh và biển số; chỉ dùng file crop còn tồn tại.
 - `check_vehicle_ocr/reconciliation.py`: canh chỉnh chuỗi ở phần đuôi khi so khớp gần để nhận đúng một lỗi thêm/bớt ký tự.
 - `check_vehicle_ocr/ui/pages/reconciliation_page.py`: mô tả rõ OCR là danh sách gốc, báo phí dò trước và phần mềm dò sau.
 - `tests/reconciliation_test.py`, `tests/ui_simplification_test.py`: kiểm tra sai một ký tự, thiếu một ký tự, dư một ký tự và bố cục vùng xem ảnh.
@@ -20,6 +21,8 @@ Tăng khả năng xem ảnh gốc tại Kết quả và cố định quy tắc n
 - Khớp gần cần duy nhất một ứng viên và khoảng cách chỉnh sửa đúng một ký tự.
 - Phần đuôi 3 hoặc 4 ký tự được so theo canh chỉnh chuỗi, nhờ đó thiếu/dư một ký tự không làm lệch toàn bộ vị trí cuối.
 - Có từ hai ứng viên gần đúng hoặc sai khác lớn hơn một ký tự được đưa vào `Cần_xác_nhận`.
+- Crop biển số chỉ được tạo dự phòng từ bbox của detector. Bbox toàn ảnh từ AI/thêm thủ công không được coi là crop biển số.
+- Khi mở lại Excel, crop cũ chỉ hiện khi đường dẫn crop đã xuất vẫn còn trên máy; Excel nguồn luôn được mở chỉ đọc.
 
 ## Kiểm tra
 

@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--executable", type=Path, default=ROOT / "release" / "CheckVehicleOCR" / "CheckVehicleOCR.exe")
-    parser.add_argument("--version", default="1.9.9")
+    parser.add_argument("--version", default="1.9.10")
     args = parser.parse_args()
     executable = args.executable.resolve()
     if not executable.is_file():

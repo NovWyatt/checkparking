@@ -7,6 +7,8 @@ import time
 from pathlib import Path
 from unittest.mock import patch
 
+from PIL import Image, ImageDraw
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -105,11 +107,23 @@ def main() -> int:
             standard.apply_plate_formatting(PlateType.MOTORCYCLE)
             special = PlateCandidate(bbox=(0, 0, 1, 1), score=80, text="49MD112345", raw_text="49MD112345", readable=True)
             special.apply_plate_formatting(PlateType.MOTORCYCLE)
-            image_path = Path(appdata) / "batch.jpg"
+            image_path = Path(appdata) / "batch.png"
+            source_image = Image.new("RGB", (900, 520), "#1f2937")
+            ImageDraw.Draw(source_image).rectangle((180, 220, 480, 310), fill="#facc15")
+            source_image.save(image_path)
+            standard.bbox = (180, 220, 300, 90)
             app.images = [image_path]
             app.results = [ImageResult(image_path=image_path, status="OK", reason="", plates=[standard, special], selected_plate_type=PlateType.MOTORCYCLE)]
+            generated_crop = app._crop_plate_from_source(app.results[0])
+            assert generated_crop is not None
+            try:
+                assert generated_crop.getpixel((generated_crop.width // 2, generated_crop.height // 2)) == (250, 204, 21)
+            finally:
+                generated_crop.close()
             app._render_detail(app.results[0])
             app.update_idletasks()
+            assert app.preview_photo is not None
+            assert app.crop_preview_photo is not None
             assert len(app.detail_plate_entries) == 2
             assert all(entry.cget("style") == "Plate.TEntry" for entry in app.detail_plate_entries)
             assert all(entry.winfo_width() >= 300 for entry in app.detail_plate_entries)

@@ -1,8 +1,8 @@
 """Read a Check Vehicle OCR export back into the Results workspace.
 
-The importer is intentionally limited to the app's own ``Theo_tung_anh``
-sheet.  It never modifies the workbook and does not treat arbitrary Excel
-files as OCR results.
+The importer is intentionally limited to the app's own export sheets.  It
+never modifies the workbook and does not treat arbitrary Excel files as OCR
+results.
 """
 
 from __future__ import annotations
@@ -48,6 +48,7 @@ def load_exported_results(workbook_path: Path) -> list[ImageResult]:
         plate_columns = [(name, index) for name, index in columns.items() if re.fullmatch(r"Biển số \d+", name)]
         if not plate_columns:
             raise ResultsImportError("Sheet Theo_tung_anh không có cột Biển số để khôi phục kết quả.")
+        crop_paths = _read_crop_paths(workbook)
 
         imported: list[ImageResult] = []
         for row in rows:
@@ -59,6 +60,13 @@ def load_exported_results(workbook_path: Path) -> list[ImageResult]:
             image_path = Path(image_value).expanduser() if image_value else path.parent / file_name
             plates = [_plate(_value(values, index)) for _name, index in plate_columns]
             plates = [plate for plate in plates if plate is not None]
+            for plate in plates:
+                available_crops = crop_paths.get(_crop_key(image_path, plate.final_text), [])
+                while available_crops:
+                    crop_path = available_crops.pop(0)
+                    if crop_path.is_file():
+                        plate.crop_path = crop_path
+                        break
             width, height = _size(_value(values, columns.get("Kích thước", -1)))
             imported.append(
                 ImageResult(
@@ -78,6 +86,42 @@ def load_exported_results(workbook_path: Path) -> list[ImageResult]:
     if not imported:
         raise ResultsImportError("File Excel không có dòng ảnh nào để khôi phục vào Kết quả.")
     return imported
+
+
+def _read_crop_paths(workbook) -> dict[tuple[str, str], list[Path]]:
+    """Map export rows to their existing crop files without changing Excel."""
+
+    if "Bien_so_doc_duoc" not in workbook.sheetnames:
+        return {}
+    worksheet = workbook["Bien_so_doc_duoc"]
+    rows = worksheet.iter_rows(values_only=True)
+    headers = next(rows, None)
+    if not headers:
+        return {}
+    columns = _columns(headers)
+    required = {"Đường dẫn ảnh", "Biển số xuất Excel", "Crop biển số"}
+    if not required.issubset(columns):
+        return {}
+
+    crop_paths: dict[tuple[str, str], list[Path]] = {}
+    for row in rows:
+        values = list(row)
+        image_value = _value(values, columns["Đường dẫn ảnh"])
+        plate_value = _value(values, columns["Biển số xuất Excel"])
+        crop_value = _value(values, columns["Crop biển số"])
+        if not image_value or not plate_value or not crop_value:
+            continue
+        key = _crop_key(Path(image_value).expanduser(), plate_value)
+        crop_paths.setdefault(key, []).append(Path(crop_value).expanduser())
+    return crop_paths
+
+
+def _crop_key(image_path: Path, plate_text: str) -> tuple[str, str]:
+    """Return a stable Windows-friendly key for mapping an exported plate."""
+
+    image_key = str(image_path).strip().replace("/", "\\").casefold()
+    plate_key = re.sub(r"\s+", "", plate_text).casefold()
+    return image_key, plate_key
 
 
 def _columns(headers: tuple[object, ...]) -> dict[str, int]:

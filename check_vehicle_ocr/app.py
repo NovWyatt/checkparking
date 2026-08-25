@@ -3588,19 +3588,56 @@ class CheckVehicleApp(tk.Tk):
         if label is None:
             return
         crop_path = next((plate.crop_path for plate in (result.plates if result else []) if plate.crop_path and plate.crop_path.exists()), None)
-        if not crop_path:
-            self.crop_preview_photo = None
-            label.configure(image="", text="Chưa có crop")
-            return
         try:
-            image = Image.open(crop_path)
-            image = ImageOps.exif_transpose(image).convert("RGB")
-            image.thumbnail((150, 100), Image.Resampling.LANCZOS)
-            self.crop_preview_photo = ImageTk.PhotoImage(image)
-            label.configure(image=self.crop_preview_photo, text="")
+            if crop_path:
+                image = Image.open(crop_path)
+                image = ImageOps.exif_transpose(image).convert("RGB")
+            else:
+                image = self._crop_plate_from_source(result)
         except Exception as exc:
             self.crop_preview_photo = None
             label.configure(image="", text=f"Không mở được crop\n{exc}")
+            return
+        if image is None:
+            self.crop_preview_photo = None
+            label.configure(image="", text="Chưa có vùng biển")
+            return
+        width = label.winfo_width() - 12
+        height = label.winfo_height() - 12
+        maximum_size = (width, height) if width >= 90 and height >= 60 else (150, 100)
+        image.thumbnail(maximum_size, Image.Resampling.LANCZOS)
+        self.crop_preview_photo = ImageTk.PhotoImage(image)
+        label.configure(image=self.crop_preview_photo, text="")
+
+    @staticmethod
+    def _crop_plate_from_source(result: ImageResult | None) -> Image.Image | None:
+        """Create a safe in-memory crop when the OCR pipeline did not save one."""
+
+        if result is None or not result.image_path.is_file():
+            return None
+        source = Image.open(result.image_path)
+        try:
+            source = ImageOps.exif_transpose(source).convert("RGB")
+            image_width, image_height = source.size
+            for plate in result.plates:
+                x, y, width, height = plate.bbox
+                if width <= 0 or height <= 0:
+                    continue
+                # AI/manual paths can intentionally use the whole image as a
+                # placeholder bbox.  It is not evidence of a plate location.
+                if width >= image_width * 0.92 and height >= image_height * 0.92:
+                    continue
+                left = max(0, min(image_width, int(x)))
+                top = max(0, min(image_height, int(y)))
+                right = max(left, min(image_width, int(x + width)))
+                bottom = max(top, min(image_height, int(y + height)))
+                if right - left < 2 or bottom - top < 2:
+                    continue
+                padding = max(4, round(max(right - left, bottom - top) * 0.08))
+                return source.crop((max(0, left - padding), max(0, top - padding), min(image_width, right + padding), min(image_height, bottom + padding)))
+        finally:
+            source.close()
+        return None
 
     def _render_plate_rows(self, result: ImageResult) -> None:
         for row_index, plate in enumerate(result.plates, start=1):

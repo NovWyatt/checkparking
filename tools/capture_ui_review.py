@@ -13,7 +13,7 @@ import time
 import os
 from pathlib import Path
 
-from PIL import Image, ImageGrab
+from PIL import Image, ImageDraw, ImageGrab
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -164,7 +164,9 @@ def main() -> int:
 
         with tempfile.TemporaryDirectory() as temporary:
             image_path = Path(temporary) / "xe_mau.jpg"
-            Image.new("RGB", (640, 360), "white").save(image_path)
+            source_image = Image.new("RGB", (640, 360), "#334155")
+            ImageDraw.Draw(source_image).rectangle((120, 120, 420, 190), fill="#facc15")
+            source_image.save(image_path)
             app._add_paths([image_path])
             app.plate_type_var.set("Xe máy")
             plate = PlateCandidate(

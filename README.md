@@ -8,7 +8,7 @@
 
 Ứng dụng Windows giúp quét hàng loạt ảnh phương tiện, nhận diện biển số, kiểm tra kết quả và xuất Excel.
 
-**Phiên bản ổn định hiện tại:** v1.9.9
+**Phiên bản ổn định hiện tại:** v1.9.10
 
 [**⬇️ Tải bản mới nhất**](https://github.com/NovWyatt/checkparking/releases/latest)
 
@@ -156,6 +156,8 @@ File Excel giữ OCR nguyên bản, chuỗi đã làm sạch, kết quả đã �
 Mở mục **Đối chiếu**, chọn file Excel OCR đã duyệt và file báo phí. Có thể bật thêm file phần mềm hoặc chỉ đối chiếu báo phí. Nút **Tải mẫu báo phí** và **Tải mẫu phần mềm** tạo file có sẵn cột `Biển số`; chỉ cần dán dữ liệu vào sheet `Danh_sach` từ dòng 2.
 
 Excel OCR đã duyệt luôn là danh sách gốc. Ứng dụng dò khớp hoàn toàn với báo phí trước; các biển còn lại mới dò với phần mềm nếu được chọn. Khớp gần chỉ được chấp nhận khi có đúng một ứng viên và khác tối đa một ký tự, gồm cả sai ký tự, thiếu hoặc dư một ký tự. Phần đuôi 3 hoặc 4 ký tự được canh chỉnh trước khi kiểm tra, vì thiếu/dư một ký tự có thể làm lệch vị trí. Nhiều ứng viên hoặc khác biệt lớn hơn một ký tự được đưa vào sheet `Cần_xác_nhận`. Biển đã khớp báo phí không được dò lại với phần mềm.
+
+Trong **Kết quả**, ô Crop biển số ưu tiên file crop do OCR tạo. Khi mở lại Excel đã xuất, ứng dụng khôi phục đường dẫn crop từ sheet `Bien_so_doc_duoc` nếu file crop vẫn còn. Nếu không có file này nhưng detector đã trả vùng biển số, ứng dụng sẽ cắt trực tiếp từ ảnh gốc để hiển thị. Trường hợp Excel cũ không có crop, không còn ảnh gốc hoặc không có vùng biển số thì crop không thể khôi phục.
 
 ## Telegram
 

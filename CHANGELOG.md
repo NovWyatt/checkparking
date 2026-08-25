@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.9.10 - Hiện lại crop biển số
+
+- Khung **Crop biển số** trong Kết quả tự cắt từ ảnh gốc theo vùng detector nếu pipeline không còn file crop riêng.
+- Khi mở lại Excel do ứng dụng xuất, đường dẫn crop trong sheet `Bien_so_doc_duoc` được khôi phục khi file crop vẫn còn; Excel nguồn vẫn chỉ được đọc.
+- Không dùng bbox toàn ảnh làm crop để tránh hiển thị sai bằng chứng.
+
 ## 1.9.9 - Xem ảnh lớn và đối chiếu chịu lỗi nhập liệu
 
 - Màn Kết quả có vùng xem ảnh lớn hơn, tự co vừa ảnh và thanh kéo để ưu tiên xem ảnh hoặc chỉnh biển số.
