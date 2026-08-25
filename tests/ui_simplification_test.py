@@ -57,12 +57,16 @@ def main() -> int:
         app = CheckVehicleApp()
         try:
             scan = app.shell.pages["scan"]
-            assert list(app.shell.nav_buttons) == ["scan", "results", "settings"]
+            assert list(app.shell.nav_buttons) == ["scan", "results", "reconciliation", "settings"]
             texts = "\n".join(_widget_texts(scan))
             assert "Engine" not in texts and "AI Providers" not in texts and "Worker ảnh" not in texts
             assert "Cục bộ — Khuyên dùng" in texts and "cách nhận diện" in texts
             assert "Loại biển số" in texts
             assert app.plate_type_var.get() == "Không tự định dạng"
+            app.show_page("reconciliation")
+            reconciliation_texts = "\n".join(_widget_texts(app.shell.pages["reconciliation"]))
+            assert "Tải mẫu báo phí" in reconciliation_texts and "Đối chiếu thêm với phần mềm" in reconciliation_texts
+            app.show_page("scan")
             app.plate_type_var.set("Xe máy")
             assert "59X1-12345" in app.plate_type_hint_var.get()
 

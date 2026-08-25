@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--executable", type=Path, default=ROOT / "release" / "CheckVehicleOCR" / "CheckVehicleOCR.exe")
-    parser.add_argument("--version", default="1.9.4")
+    parser.add_argument("--version", default="1.9.7")
     args = parser.parse_args()
     executable = args.executable.resolve()
     if not executable.is_file():
@@ -50,6 +50,7 @@ def main() -> int:
             assert payload["update_source_mode"] == "github"
             assert payload["github_repository"] == "NovWyatt/checkparking"
             assert payload["update_primary_action"] == "Kiểm tra"
+            assert payload["reconciliation_navigation"] is True
         finally:
             process.terminate()
             try:

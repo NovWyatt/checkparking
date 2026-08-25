@@ -29,7 +29,7 @@ class ScanPage(Page):
     def _build_input_step(self, controller) -> None:
         inputs = ttk.LabelFrame(self.content, text="Bước 1 — Chọn dữ liệu", style="Card.TLabelframe")
         self.inputs = inputs
-        inputs.grid(row=0, column=0, sticky="nsew", padx=(0, 6), pady=(0, 12))
+        inputs.grid(row=0, column=0, sticky="nsew", padx=(0, 8), pady=(0, 16))
         inputs.columnconfigure((0, 1), weight=1)
         ttk.Label(inputs, text="Chọn từng ảnh hoặc một thư mục ảnh để bắt đầu.", style="SurfaceMuted.TLabel").grid(
             row=0, column=0, columnspan=2, sticky="w", pady=(0, 10)
@@ -79,7 +79,7 @@ class ScanPage(Page):
     def _build_recognition_step(self, controller) -> None:
         settings = ttk.LabelFrame(self.content, text="Bước 2 — Chọn cách nhận diện", style="Card.TLabelframe")
         self.settings = settings
-        settings.grid(row=0, column=1, sticky="nsew", padx=(6, 0), pady=(0, 12))
+        settings.grid(row=0, column=1, sticky="nsew", padx=(8, 0), pady=(0, 16))
         settings.columnconfigure(0, weight=1)
         choices = (
             (
@@ -154,10 +154,10 @@ class ScanPage(Page):
     def _build_progress_step(self, controller) -> None:
         progress = ttk.LabelFrame(self.content, text="Bước 3 — Bắt đầu", style="Card.TLabelframe")
         self.progress_panel = progress
-        progress.grid(row=1, column=0, columnspan=2, sticky="new", pady=(0, 12))
+        progress.grid(row=1, column=0, columnspan=2, sticky="new", pady=(0, 16))
         progress.columnconfigure(0, weight=1)
         controller.progress = ttk.Progressbar(progress, mode="determinate")
-        controller.progress.grid(row=0, column=0, columnspan=3, sticky="ew", pady=(0, 8))
+        controller.progress.grid(row=0, column=0, columnspan=3, sticky="ew", pady=(0, 12))
         ttk.Label(progress, textvariable=controller.progress_primary_var, style="Surface.TLabel").grid(row=1, column=0, sticky="w")
         ttk.Label(progress, textvariable=controller.progress_timing_var, style="SurfaceMuted.TLabel").grid(row=1, column=1, sticky="w", padx=16)
         ttk.Label(progress, textvariable=controller.progress_workers_var, style="SurfaceMuted.TLabel").grid(row=1, column=2, sticky="e")
@@ -169,7 +169,7 @@ class ScanPage(Page):
         actions.columnconfigure(0, weight=1)
         controller.start_button = ttk.Button(actions, text="Bắt đầu quét", command=controller.start_processing, style="Primary.TButton")
         controller.start_button.grid(row=0, column=0, sticky="ew", padx=(0, 4))
-        controller.stop_button = ttk.Button(actions, text="Dừng", command=controller.stop_processing, state="disabled")
+        controller.stop_button = ttk.Button(actions, text="Dừng", command=controller.stop_processing, state="disabled", style="Danger.TButton")
         controller.stop_button.grid(row=0, column=1, sticky="ew", padx=4)
         controller.view_results_button = ttk.Button(actions, text="Xem kết quả", command=lambda: controller.show_page("results"), state="disabled")
         controller.view_results_button.grid(row=0, column=2, sticky="ew", padx=4)
@@ -192,6 +192,6 @@ class ScanPage(Page):
             self.settings.grid_configure(row=1, column=0, columnspan=2, padx=0)
             self.progress_panel.grid_configure(row=2, column=0, columnspan=2)
         else:
-            self.inputs.grid_configure(row=0, column=0, columnspan=1, padx=(0, 6))
-            self.settings.grid_configure(row=0, column=1, columnspan=1, padx=(6, 0))
+            self.inputs.grid_configure(row=0, column=0, columnspan=1, padx=(0, 8))
+            self.settings.grid_configure(row=0, column=1, columnspan=1, padx=(8, 0))
             self.progress_panel.grid_configure(row=1, column=0, columnspan=2)

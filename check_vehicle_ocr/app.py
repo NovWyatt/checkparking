@@ -40,6 +40,7 @@ from .plate_recognizer import DEFAULT_PLATE_RECOGNIZER_REGION, PlateRecognizerEn
 from .plate_formatting import DetectedPlateFormat, PlateFormatStatus, PlateType, coerce_plate_type
 from .processor import process_image
 from .providers import OpenAICompatibleProvider, ProviderConfig, ProviderStatus, redact_provider_error
+from .reconciliation import ReconciliationError, export_reconciliation_report, reconcile_workbooks, write_reconciliation_template
 from .services.progress_service import BatchProgress, BatchStatus
 from .services.ocr_process import OcrProcessClient, OcrProcessCrashed, OcrProcessError, OcrProcessTask
 from .services.worker_manager import WorkItem, WorkerManager, WorkerSettings
@@ -193,6 +194,10 @@ UPDATE_SOURCE_LABELS = {
     "github": "GitHub Releases",
     "manifest": "Manifest tùy chỉnh",
 }
+RECONCILIATION_SUFFIX_LABELS = {
+    3: "3 ký tự cuối",
+    4: "4 ký tự cuối - Khuyên dùng",
+}
 
 
 class _UnavailableEngine:
@@ -261,6 +266,7 @@ class CheckVehicleApp(tk.Tk):
         self.event_queue: queue.Queue = queue.Queue()
         self.worker: threading.Thread | None = None
         self.export_worker: threading.Thread | None = None
+        self.reconciliation_worker: threading.Thread | None = None
         self.stop_event = threading.Event()
         self.retry_failed_before_count = 0
         self._save_after_id: str | None = None
@@ -287,6 +293,7 @@ class CheckVehicleApp(tk.Tk):
         self.plate_type_hint_var = tk.StringVar()
         self.reformat_hint_var = tk.StringVar()
         self.export_status_var = tk.StringVar(value="Chưa có dữ liệu để xuất.")
+        self.reconciliation_status_var = tk.StringVar(value="Chọn file OCR và báo phí để bắt đầu đối chiếu.")
         self.provider_status_var = tk.StringVar(value="Chưa kiểm tra kết nối.")
         self.telegram_status_var = tk.StringVar(value="Telegram đang tắt.")
         self.update_status_var = tk.StringVar(value="Chưa cấu hình")
@@ -349,6 +356,12 @@ class CheckVehicleApp(tk.Tk):
 
         self.output_dir_var = tk.StringVar(value=str(output_dir))
         self.output_var = tk.StringVar(value=str(output_dir / f"vehicle_plates_{datetime.now():%Y%m%d_%H%M%S}.xlsx"))
+        saved_suffix_length = int(self.settings.get("reconciliation_suffix_length", 4) or 4)
+        self.reconciliation_ocr_path_var = tk.StringVar()
+        self.reconciliation_fee_path_var = tk.StringVar()
+        self.reconciliation_software_path_var = tk.StringVar()
+        self.reconciliation_compare_software_var = tk.BooleanVar(value=bool(self.settings.get("reconciliation_compare_software", True)))
+        self.reconciliation_suffix_length_var = tk.StringVar(value=RECONCILIATION_SUFFIX_LABELS.get(saved_suffix_length, RECONCILIATION_SUFFIX_LABELS[4]))
         self.embed_excel_images_var = tk.BooleanVar(value=bool(self.settings.get("embed_excel_images", True)))
         self.export_reviewed_only_var = tk.BooleanVar(value=bool(self.settings.get("export_reviewed_only", False)))
         self.windows_notifications_var = tk.BooleanVar(value=bool(self.settings.get("windows_notifications", False)))
@@ -530,7 +543,7 @@ class CheckVehicleApp(tk.Tk):
         # test selection into an operator profile.  It is intentionally not a
         # user setting or public command-line feature.
         ui_review_page = os.environ.get("CHECK_VEHICLE_UI_REVIEW_PAGE", "").strip().lower()
-        if ui_review_page in {"results", "settings", "updates"}:
+        if ui_review_page in {"results", "reconciliation", "settings", "updates"}:
             if ui_review_page == "updates":
                 self.show_settings_section("updates")
             else:
@@ -567,6 +580,7 @@ class CheckVehicleApp(tk.Tk):
                 "update_source_mode": self._update_source_mode_key(),
                 "github_repository": self.github_repository_var.get().strip(),
                 "update_primary_action": self.update_check_button.cget("text") if self.update_check_button else "",
+                "reconciliation_navigation": "reconciliation" in self.shell.nav_buttons,
             }
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
@@ -1915,6 +1929,20 @@ class CheckVehicleApp(tk.Tk):
                     self._log(f"Lỗi xuất Excel: {message}")
                     self.export_status_var.set(message)
                     self._notify(f"Không xuất được Excel: {message}", "error")
+                elif kind == "reconciliation_done":
+                    _, exported_path, total, needs_review = event
+                    self.reconciliation_status_var.set(
+                        f"Đã tạo báo cáo {total} biển số. Cần xác nhận: {needs_review}. File: {exported_path}"
+                    )
+                    self._log(f"Đã tạo báo cáo đối chiếu: {exported_path}")
+                    self._notify("Đối chiếu hoàn tất. Báo cáo Excel đã được lưu an toàn.", "success")
+                    self.refresh_reconciliation_controls()
+                elif kind == "reconciliation_error":
+                    _, message = event
+                    self.reconciliation_status_var.set(message)
+                    self._log(f"Lỗi đối chiếu Excel: {message}")
+                    self._notify(f"Không tạo được báo cáo đối chiếu: {message}", "error")
+                    self.refresh_reconciliation_controls()
                 elif kind == "provider_status":
                     _, status, values = event
                     self._apply_provider_status(status, values)
@@ -2296,6 +2324,112 @@ class CheckVehicleApp(tk.Tk):
         self.output_dir_var.set(str(directory))
         self.output_var.set(str(directory / f"vehicle_plates_{datetime.now():%Y%m%d_%H%M%S}.xlsx"))
         self._schedule_settings_save()
+
+    def choose_reconciliation_ocr_file(self) -> None:
+        self._choose_reconciliation_file(self.reconciliation_ocr_path_var, "Chọn file Excel OCR đã xuất")
+
+    def choose_reconciliation_fee_file(self) -> None:
+        self._choose_reconciliation_file(self.reconciliation_fee_path_var, "Chọn file Excel báo phí")
+
+    def choose_reconciliation_software_file(self) -> None:
+        self._choose_reconciliation_file(self.reconciliation_software_path_var, "Chọn file Excel phần mềm")
+
+    def _choose_reconciliation_file(self, variable: tk.StringVar, title: str) -> None:
+        selected = filedialog.askopenfilename(title=title, filetypes=[("Excel", "*.xlsx")])
+        if not selected:
+            return
+        variable.set(str(Path(selected).resolve()))
+        self.reconciliation_status_var.set("Đã chọn file. Có thể tạo báo cáo khi đủ nguồn dữ liệu.")
+        self.refresh_reconciliation_controls()
+
+    def download_fee_template(self) -> None:
+        self._download_reconciliation_template("Báo phí", "mau_bao_phi.xlsx")
+
+    def download_software_template(self) -> None:
+        self._download_reconciliation_template("Phần mềm", "mau_phan_mem.xlsx")
+
+    def _download_reconciliation_template(self, source_label: str, initial_name: str) -> None:
+        selected = filedialog.asksaveasfilename(
+            title=f"Lưu file mẫu {source_label.lower()}",
+            defaultextension=".xlsx",
+            filetypes=[("Excel", "*.xlsx")],
+            initialdir=self.output_dir_var.get() or str(_default_output_dir()),
+            initialfile=initial_name,
+        )
+        if not selected:
+            return
+        try:
+            template = write_reconciliation_template(Path(selected), source_label)
+        except ReconciliationError as exc:
+            messagebox.showerror("Không tạo được file mẫu", str(exc), parent=self)
+            return
+        self.reconciliation_status_var.set(f"Đã tạo file mẫu {source_label.lower()}: {template}")
+        self._notify(f"Đã tạo file mẫu {source_label.lower()}.", "success")
+
+    def reconciliation_ready(self) -> bool:
+        if self.reconciliation_worker and self.reconciliation_worker.is_alive():
+            return False
+        if not self.reconciliation_ocr_path_var.get().strip() or not self.reconciliation_fee_path_var.get().strip():
+            return False
+        return not self.reconciliation_compare_software_var.get() or bool(self.reconciliation_software_path_var.get().strip())
+
+    def refresh_reconciliation_controls(self) -> None:
+        button = getattr(self, "reconciliation_run_button", None)
+        if button is not None:
+            button.configure(state="normal" if self.reconciliation_ready() else "disabled")
+        self._refresh_primary_action()
+
+    def start_reconciliation(self) -> None:
+        if self.reconciliation_worker and self.reconciliation_worker.is_alive():
+            return
+        if not self.reconciliation_ready():
+            self.reconciliation_status_var.set("Hãy chọn file OCR, báo phí và file phần mềm nếu đã bật đối chiếu phần mềm.")
+            self._notify("Chưa đủ file để đối chiếu.", "warning")
+            return
+        output = filedialog.asksaveasfilename(
+            title="Lưu báo cáo đối chiếu",
+            defaultextension=".xlsx",
+            filetypes=[("Excel", "*.xlsx")],
+            initialdir=self.output_dir_var.get() or str(_default_output_dir()),
+            initialfile=f"doi_chieu_bien_so_{datetime.now():%Y%m%d_%H%M%S}.xlsx",
+        )
+        if not output:
+            return
+        ocr_path = Path(self.reconciliation_ocr_path_var.get()).expanduser()
+        fee_path = Path(self.reconciliation_fee_path_var.get()).expanduser()
+        software_path = Path(self.reconciliation_software_path_var.get()).expanduser() if self.reconciliation_compare_software_var.get() else None
+        self.reconciliation_status_var.set("Đang đọc và đối chiếu Excel ở nền...")
+        self.reconciliation_worker = threading.Thread(
+            target=self._worker_reconcile,
+            args=(ocr_path, fee_path, software_path, Path(output), self._reconciliation_suffix_length()),
+            daemon=True,
+            name="check_vehicle_reconciliation",
+        )
+        self.reconciliation_worker.start()
+        self.refresh_reconciliation_controls()
+
+    def _worker_reconcile(
+        self,
+        ocr_path: Path,
+        fee_path: Path,
+        software_path: Path | None,
+        output_path: Path,
+        suffix_length: int,
+    ) -> None:
+        try:
+            report = reconcile_workbooks(ocr_path, fee_path, software_path, suffix_length=suffix_length)
+            exported_path = export_reconciliation_report(report, output_path)
+        except (ReconciliationError, OSError, ValueError) as exc:
+            self.event_queue.put(("reconciliation_error", str(exc)))
+            return
+        except Exception:
+            self.event_queue.put(("reconciliation_error", "Không thể tạo báo cáo đối chiếu. Hãy kiểm tra lại các file Excel đã chọn."))
+            return
+        needs_review = sum(row.fee.needs_review or row.software.needs_review for row in report.rows)
+        self.event_queue.put(("reconciliation_done", exported_path, len(report.rows), needs_review))
+
+    def _reconciliation_suffix_length(self) -> int:
+        return 3 if self.reconciliation_suffix_length_var.get().strip().startswith("3") else 4
 
     def _refresh_primary_action(self) -> None:
         shell = getattr(self, "shell", None)
@@ -3672,6 +3806,8 @@ class CheckVehicleApp(tk.Tk):
             self.ai_review_policy_var,
             self.embed_excel_images_var,
             self.export_reviewed_only_var,
+            self.reconciliation_compare_software_var,
+            self.reconciliation_suffix_length_var,
             self.output_dir_var,
             self.dark_mode_var,
             self.custom_provider_enabled_var,
@@ -3712,6 +3848,7 @@ class CheckVehicleApp(tk.Tk):
         for variable in (self.custom_provider_enabled_var, self.custom_base_url_var, self.custom_model_var):
             variable.trace_add("write", lambda *_args: self._on_recognition_mode_changed())
         self.remember_key_var.trace_add("write", lambda *_args: self._update_key_status())
+        self.reconciliation_compare_software_var.trace_add("write", lambda *_args: self.refresh_reconciliation_controls())
 
     def _on_api_key_changed(self) -> None:
         has_any_key = any(
@@ -3786,6 +3923,8 @@ class CheckVehicleApp(tk.Tk):
                 "ai_review_policy": self._selected_ai_review_policy().value,
                 "embed_excel_images": bool(self.embed_excel_images_var.get()),
                 "export_reviewed_only": bool(self.export_reviewed_only_var.get()),
+                "reconciliation_compare_software": bool(self.reconciliation_compare_software_var.get()),
+                "reconciliation_suffix_length": self._reconciliation_suffix_length(),
                 "dark_mode": bool(self.dark_mode_var.get()),
                 "output_dir": output_dir,
                 "provider_configs": {"custom_openai": self._custom_provider_snapshot()},

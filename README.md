@@ -8,7 +8,7 @@
 
 Ứng dụng Windows giúp quét hàng loạt ảnh phương tiện, nhận diện biển số, kiểm tra kết quả và xuất Excel.
 
-**Phiên bản ổn định hiện tại:** v1.9.6
+**Phiên bản ổn định hiện tại:** v1.9.7
 
 [**⬇️ Tải bản mới nhất**](https://github.com/NovWyatt/checkparking/releases/latest)
 
@@ -60,7 +60,7 @@
 3. Chạy installer và hoàn tất các bước cài đặt.
 4. Mở **Check Vehicle OCR** từ Start Menu hoặc shortcut đã chọn.
 
-Người dùng thông thường **không cần** cài Python, VS Code, PaddleOCR, `pip` hoặc Tesseract thủ công.
+Người dùng thông thường **không cần** cài Python, Visual Studio Code, PaddleOCR, `pip` hoặc Tesseract thủ công.
 
 Windows SmartScreen có thể hiển thị cảnh báo đối với bản chưa được ký số. Hãy kiểm tra nguồn tải là GitHub Releases của `NovWyatt/checkparking` và đối chiếu SHA-256 khi cần.
 
@@ -77,6 +77,7 @@ Tải `CheckVehicleOCR-Portable-<version>.zip`, giải nén vào một thư mụ
 5. Chọn chế độ **Nhanh**, **Cân bằng** hoặc **Kỹ**.
 6. Bấm **Bắt đầu quét**, sau đó xem và sửa các kết quả cần kiểm tra.
 7. Bấm **Xuất Excel** khi đã sẵn sàng.
+8. Mở **Đối chiếu** để so kết quả OCR với báo phí, và tùy chọn so thêm với phần mềm.
 
 ## Các chế độ quét
 
@@ -147,6 +148,12 @@ File Excel hiện có các sheet sau:
 - `Review_tat_ca`: chỉ có khi xuất sau bước review.
 
 File Excel giữ OCR nguyên bản, chuỗi đã làm sạch, kết quả đã định dạng, trạng thái review và đường dẫn đối chiếu. Có thể nhúng thumbnail ảnh/crop nếu bật tùy chọn. Các giá trị bắt đầu bằng ký tự công thức được escape để giảm rủi ro Formula Injection.
+
+## Đối chiếu báo phí và phần mềm
+
+Mở mục **Đối chiếu**, chọn file Excel OCR đã duyệt và file báo phí. Có thể bật thêm file phần mềm hoặc chỉ đối chiếu báo phí. Nút **Tải mẫu báo phí** và **Tải mẫu phần mềm** tạo file có sẵn cột `Biển số`; chỉ cần dán dữ liệu vào sheet `Danh_sach` từ dòng 2.
+
+Ứng dụng dò khớp hoàn toàn trước. Các biển còn lại chỉ được chấp nhận là khớp gần khi có đúng một ứng viên, khác tối đa một ký tự và còn đủ ký tự cuối theo lựa chọn 3 hoặc 4 ký tự. Biển có nhiều ứng viên, thiếu/dư ký tự hoặc sai khác không đủ điều kiện được đưa vào sheet `Cần_xác_nhận`. Biển đã khớp báo phí không được dò lại với phần mềm.
 
 ## Telegram
 

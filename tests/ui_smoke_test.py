@@ -24,12 +24,12 @@ def main() -> int:
             app.update_idletasks()
             assert app.minsize()[0] <= 1024 and app.minsize()[1] <= 640
             assert set(app.shell.pages) == {"scan"}
-            assert list(app.shell.nav_buttons) == ["scan", "results", "settings"]
+            assert list(app.shell.nav_buttons) == ["scan", "results", "reconciliation", "settings"]
             assert app.telegram_notifier is None and app.provider_refresh_button is None and app.update_check_button is None
             assert app.local_ocr_workers_var.get() == 1
             assert "một lượt nhận diện" in app.local_ocr_hint_var.get()
             assert app.recognition_mode_var.get() == "local"
-            for page in ("results", "settings"):
+            for page in ("results", "reconciliation", "settings"):
                 app.show_page(page)
                 app.update_idletasks()
                 assert app.shell.pages[page].winfo_exists()
@@ -38,6 +38,20 @@ def main() -> int:
                 app.update_idletasks()
                 assert app.ui_state.current_page == expected
             assert app.crop_preview_label.winfo_exists()
+            app.show_page("reconciliation")
+            app.update_idletasks()
+            assert str(app.reconciliation_run_button.cget("state")) == "disabled"
+            assert str(app.shell.action_button.cget("state")) == "disabled"
+            with tempfile.TemporaryDirectory() as reconciliation_temp:
+                placeholder = Path(reconciliation_temp) / "source.xlsx"
+                placeholder.write_bytes(b"placeholder")
+                app.reconciliation_ocr_path_var.set(str(placeholder))
+                app.reconciliation_fee_path_var.set(str(placeholder))
+                app.reconciliation_compare_software_var.set(False)
+                app.refresh_reconciliation_controls()
+                assert str(app.reconciliation_run_button.cget("state")) == "normal"
+                assert str(app.shell.action_button.cget("state")) == "normal"
+            app.reconciliation_compare_software_var.set(True)
             original_theme = app.dark_mode_var.get()
             app.dark_mode_var.set(not original_theme)
             app._on_theme_toggle()
@@ -50,12 +64,14 @@ def main() -> int:
             app.tk.call("tk", "scaling", 1.0)
             app.show_page("scan")
             assert str(app.start_button.cget("state")) == "disabled"
+            assert str(app.shell.action_button.cget("state")) == "disabled"
             with tempfile.TemporaryDirectory() as temporary:
                 image_path = Path(temporary) / "input.jpg"
                 Image.new("RGB", (80, 40), "white").save(image_path)
                 app._add_paths([image_path])
                 app.update_idletasks()
                 assert str(app.start_button.cget("state")) == "normal"
+                assert str(app.shell.action_button.cget("state")) == "normal"
                 app._apply_progress_snapshot(
                     {
                         "status": "RUNNING",
@@ -78,6 +94,7 @@ def main() -> int:
                 assert "cấu hình" not in app.progress_workers_var.get().lower()
                 app.clear_all()
                 assert str(app.start_button.cget("state")) == "disabled"
+                assert str(app.shell.action_button.cget("state")) == "disabled"
         finally:
             app.destroy()
             if previous_appdata is None:

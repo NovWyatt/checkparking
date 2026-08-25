@@ -22,10 +22,10 @@ class ResultsPage(Page):
         for index, (label, variable) in enumerate(
             (("Ảnh đã chọn", controller.total_var), ("Đã xử lý", controller.scanned_var), ("Biển số", controller.plates_var), ("Cần kiểm tra", controller.review_var))
         ):
-            card = ttk.Frame(metrics, style="Surface.TFrame", padding=(12, 10))
-            card.grid(row=0, column=index, sticky="ew", padx=(0 if index == 0 else 8, 0))
+            card = ttk.Frame(metrics, style="MetricCard.TFrame", padding=(16, 12))
+            card.grid(row=0, column=index, sticky="ew", padx=(0 if index == 0 else 10, 0))
             ttk.Label(card, textvariable=variable, style="Metric.TLabel").pack(anchor="w")
-            ttk.Label(card, text=label, style="SurfaceMuted.TLabel").pack(anchor="w")
+            ttk.Label(card, text=label, style="MetricCaption.TLabel").pack(anchor="w", pady=(2, 0))
 
         left = ttk.Frame(self, style="Surface.TFrame", padding=12)
         left.grid(row=1, column=0, sticky="nsew", padx=(0, 8))

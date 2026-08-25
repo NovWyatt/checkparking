@@ -131,6 +131,13 @@ def main() -> int:
         capture(app, output_dir / "dark-scan.png")
         app.dark_mode_var.set(False)
         app._on_theme_toggle()
+        app.show_page("reconciliation")
+        capture(app, output_dir / "light-reconciliation.png")
+        app.dark_mode_var.set(True)
+        app._on_theme_toggle()
+        capture(app, output_dir / "dark-reconciliation.png")
+        app.dark_mode_var.set(False)
+        app._on_theme_toggle()
         app._apply_progress_snapshot(
             {
                 "status": "RUNNING",

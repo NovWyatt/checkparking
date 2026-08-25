@@ -6,44 +6,50 @@ from tkinter import ttk
 
 TOKENS = {
     "light": {
-        "background": "#F6F7FA",
+        "background": "#F5F7FB",
         "surface": "#FFFFFF",
-        "surface_hover": "#F0F2F6",
-        "surface_selected": "#E4E8F3",
-        "border": "#C8CDD8",
-        "text_primary": "#171923",
-        "text_secondary": "#4D5563",
-        "text_muted": "#596271",
-        "accent": "#4C5CCB",
-        "accent_hover": "#3F4DB0",
+        "surface_raised": "#FBFCFF",
+        "sidebar": "#FAFCFF",
+        "surface_hover": "#F0F4FA",
+        "surface_selected": "#E5EDFF",
+        "border": "#D5DEEA",
+        "text_primary": "#152033",
+        "text_secondary": "#4B5B70",
+        "text_muted": "#56677D",
+        "accent": "#2457D6",
+        "accent_hover": "#1D46AE",
+        "accent_soft": "#E5EDFF",
         "on_accent": "#FFFFFF",
-        "success": "#146C45",
-        "warning": "#8A5709",
-        "danger": "#B42335",
-        "info": "#245DC1",
-        "preview": "#111319",
-        "disabled_surface": "#E7EAF0",
-        "disabled_text": "#4D5563",
+        "success": "#147C4B",
+        "warning": "#945A08",
+        "danger": "#B3263B",
+        "info": "#265FD2",
+        "preview": "#101827",
+        "disabled_surface": "#E9EEF5",
+        "disabled_text": "#6D7C8E",
     },
     "dark": {
-        "background": "#121318",
-        "surface": "#1C1E25",
-        "surface_hover": "#262933",
-        "surface_selected": "#303442",
-        "border": "#4B5060",
-        "text_primary": "#F5F7FB",
-        "text_secondary": "#CDD3DD",
-        "text_muted": "#B6BECA",
-        "accent": "#AEB6FF",
-        "accent_hover": "#C1C7FF",
-        "on_accent": "#14172B",
-        "success": "#78D6A5",
-        "warning": "#FFD080",
-        "danger": "#FF9EAA",
-        "info": "#9DC1FF",
-        "preview": "#08090C",
-        "disabled_surface": "#292D38",
-        "disabled_text": "#C5CCD7",
+        "background": "#10151D",
+        "surface": "#171E28",
+        "surface_raised": "#1B2430",
+        "sidebar": "#141B24",
+        "surface_hover": "#202A36",
+        "surface_selected": "#263C62",
+        "border": "#334356",
+        "text_primary": "#F3F7FC",
+        "text_secondary": "#C8D3E1",
+        "text_muted": "#ABB8C9",
+        "accent": "#9AB9FF",
+        "accent_hover": "#B7CCFF",
+        "accent_soft": "#263C62",
+        "on_accent": "#10203D",
+        "success": "#78DCAB",
+        "warning": "#FFD17C",
+        "danger": "#FFABB6",
+        "info": "#A9C6FF",
+        "preview": "#090F19",
+        "disabled_surface": "#202936",
+        "disabled_text": "#93A2B5",
     },
 }
 
@@ -69,11 +75,15 @@ def configure_styles(root: tk.Misc, palette: dict[str, str], *, initialize_theme
     # reads this palette immediately before the list is opened.
     root._combobox_dropdown_palette = dict(palette)
     font = ("Segoe UI", 10)
+    medium_font = ("Segoe UI Semibold", 10)
     style.configure("App.TFrame", background=palette["background"])
     style.configure("Surface.TFrame", background=palette["surface"])
-    style.configure("Sidebar.TFrame", background=palette["surface"])
-    style.configure("Card.TLabelframe", background=palette["surface"], bordercolor=palette["border"], relief="solid", padding=12)
-    style.configure("Card.TLabelframe.Label", background=palette["surface"], foreground=palette["text_primary"], font=("Segoe UI", 10, "bold"))
+    style.configure("Raised.TFrame", background=palette["surface_raised"])
+    style.configure("Sidebar.TFrame", background=palette["sidebar"])
+    style.configure("Header.TFrame", background=palette["background"])
+    style.configure("MetricCard.TFrame", background=palette["surface"], bordercolor=palette["border"], relief="solid", borderwidth=1)
+    style.configure("Card.TLabelframe", background=palette["surface"], bordercolor=palette["border"], relief="solid", borderwidth=1, padding=(16, 14))
+    style.configure("Card.TLabelframe.Label", background=palette["surface"], foreground=palette["text_primary"], font=medium_font)
     style.configure("TLabel", background=palette["background"], foreground=palette["text_primary"], font=font)
     style.configure("Surface.TLabel", background=palette["surface"], foreground=palette["text_primary"], font=font)
     style.configure("Muted.TLabel", background=palette["background"], foreground=palette["text_secondary"], font=("Segoe UI", 9))
@@ -81,25 +91,42 @@ def configure_styles(root: tk.Misc, palette: dict[str, str], *, initialize_theme
     style.configure("Warning.TLabel", background=palette["surface"], foreground=palette["warning"], font=("Segoe UI", 9, "bold"))
     style.configure("Error.TLabel", background=palette["surface"], foreground=palette["danger"], font=("Segoe UI", 9, "bold"))
     style.configure("Success.TLabel", background=palette["surface"], foreground=palette["success"], font=("Segoe UI", 9, "bold"))
-    style.configure("AppTitle.TLabel", background=palette["surface"], foreground=palette["text_primary"], font=("Segoe UI", 15, "bold"))
-    style.configure("PageTitle.TLabel", background=palette["background"], foreground=palette["text_primary"], font=("Segoe UI", 16, "bold"))
-    style.configure("Section.TLabel", background=palette["surface"], foreground=palette["text_primary"], font=("Segoe UI", 11, "bold"))
-    style.configure("Metric.TLabel", background=palette["surface"], foreground=palette["accent"], font=("Segoe UI", 16, "bold"))
-    style.configure("Nav.TButton", anchor="w", padding=(12, 8), background=palette["surface"], foreground=palette["text_secondary"], bordercolor=palette["surface"])
-    style.map("Nav.TButton", background=[("active", palette["surface_hover"]), ("selected", palette["surface_selected"])], foreground=[("selected", palette["text_primary"])])
-    style.configure("Primary.TButton", padding=(14, 8), background=palette["accent"], foreground=palette["on_accent"], bordercolor=palette["accent"], font=("Segoe UI", 10, "bold"))
+    style.configure("SidebarTitle.TLabel", background=palette["sidebar"], foreground=palette["text_primary"], font=("Segoe UI Semibold", 17))
+    style.configure("SidebarSubtitle.TLabel", background=palette["sidebar"], foreground=palette["text_secondary"], font=("Segoe UI", 9))
+    style.configure("SidebarStatus.TLabel", background=palette["sidebar"], foreground=palette["text_secondary"], font=("Segoe UI", 9))
+    style.configure("AppTitle.TLabel", background=palette["sidebar"], foreground=palette["text_primary"], font=("Segoe UI Semibold", 16))
+    style.configure("PageTitle.TLabel", background=palette["background"], foreground=palette["text_primary"], font=("Segoe UI Semibold", 20))
+    style.configure("HeaderStatus.TLabel", background=palette["background"], foreground=palette["text_secondary"], font=("Segoe UI", 9))
+    style.configure("Section.TLabel", background=palette["surface"], foreground=palette["text_primary"], font=("Segoe UI Semibold", 11))
+    style.configure("Metric.TLabel", background=palette["surface"], foreground=palette["accent"], font=("Segoe UI Semibold", 21))
+    style.configure("MetricCaption.TLabel", background=palette["surface"], foreground=palette["text_secondary"], font=("Segoe UI", 9))
+    style.configure("Nav.TButton", anchor="w", padding=(12, 10), background=palette["sidebar"], foreground=palette["text_secondary"], bordercolor=palette["sidebar"], font=medium_font)
+    style.map(
+        "Nav.TButton",
+        background=[("active", palette["surface_hover"]), ("selected", palette["surface_selected"])],
+        foreground=[("selected", palette["accent"]), ("active", palette["text_primary"])],
+        bordercolor=[("focus", palette["accent"]), ("selected", palette["surface_selected"])],
+    )
+    style.configure("Primary.TButton", padding=(16, 9), background=palette["accent"], foreground=palette["on_accent"], bordercolor=palette["accent"], font=medium_font)
     style.map(
         "Primary.TButton",
         background=[("active", palette["accent_hover"]), ("disabled", palette["disabled_surface"])],
         foreground=[("disabled", palette["disabled_text"])],
         bordercolor=[("focus", palette["accent"]), ("disabled", palette["border"])],
     )
-    style.configure("TButton", padding=(10, 7), background=palette["surface"], foreground=palette["text_primary"], bordercolor=palette["border"])
+    style.configure("TButton", padding=(11, 8), background=palette["surface"], foreground=palette["text_primary"], bordercolor=palette["border"], font=font)
     style.map(
         "TButton",
         background=[("active", palette["surface_hover"]), ("disabled", palette["disabled_surface"])],
         foreground=[("disabled", palette["disabled_text"])],
         bordercolor=[("focus", palette["accent"]), ("disabled", palette["border"])],
+    )
+    style.configure("Danger.TButton", padding=(14, 8), background=palette["surface"], foreground=palette["danger"], bordercolor=palette["border"], font=medium_font)
+    style.map(
+        "Danger.TButton",
+        background=[("active", palette["surface_hover"]), ("disabled", palette["disabled_surface"])],
+        foreground=[("disabled", palette["disabled_text"])],
+        bordercolor=[("focus", palette["danger"]), ("active", palette["danger"]), ("disabled", palette["border"])],
     )
     style.configure("TCheckbutton", background=palette["surface"], foreground=palette["text_primary"], font=font)
     style.map("TCheckbutton", foreground=[("disabled", palette["disabled_text"]), ("focus", palette["text_primary"])])
@@ -152,15 +179,16 @@ def configure_styles(root: tk.Misc, palette: dict[str, str], *, initialize_theme
         arrowcolor=[("disabled", palette["disabled_text"]), ("focus", palette["accent"])],
         bordercolor=[("focus", palette["accent"]), ("disabled", palette["border"])],
     )
-    style.configure("StatusPill.TLabel", background=palette["surface_selected"], foreground=palette["text_primary"], padding=(8, 4), font=("Segoe UI", 9, "bold"))
-    style.configure("Treeview", background=palette["surface"], fieldbackground=palette["surface"], foreground=palette["text_primary"], rowheight=30, bordercolor=palette["border"], font=("Segoe UI", 9))
+    style.configure("StatusPill.TLabel", background=palette["accent_soft"], foreground=palette["accent"], padding=(9, 4), font=medium_font)
+    style.configure("Treeview", background=palette["surface"], fieldbackground=palette["surface"], foreground=palette["text_primary"], rowheight=34, bordercolor=palette["border"], font=("Segoe UI", 9))
     style.map("Treeview", background=[("selected", palette["surface_selected"])], foreground=[("selected", palette["text_primary"])])
-    style.configure("Treeview.Heading", background=palette["surface_hover"], foreground=palette["text_primary"], bordercolor=palette["border"], font=("Segoe UI", 9, "bold"))
-    style.configure("TProgressbar", background=palette["accent"], troughcolor=palette["border"], bordercolor=palette["border"])
-    style.configure("Success.Horizontal.TProgressbar", background=palette["success"], troughcolor=palette["border"], bordercolor=palette["success"])
+    style.configure("Treeview.Heading", background=palette["surface_hover"], foreground=palette["text_primary"], bordercolor=palette["border"], font=medium_font, padding=(10, 8))
+    style.configure("TProgressbar", background=palette["accent"], troughcolor=palette["surface_hover"], bordercolor=palette["surface_hover"], thickness=8)
+    style.configure("Success.Horizontal.TProgressbar", background=palette["success"], troughcolor=palette["surface_hover"], bordercolor=palette["surface_hover"], thickness=8)
     style.configure("TNotebook", background=palette["background"], bordercolor=palette["border"])
-    style.configure("TNotebook.Tab", background=palette["surface"], foreground=palette["text_secondary"], padding=(12, 7))
-    style.map("TNotebook.Tab", background=[("selected", palette["surface_selected"]), ("active", palette["surface_hover"])], foreground=[("selected", palette["text_primary"])])
+    style.configure("TNotebook.Tab", background=palette["surface"], foreground=palette["text_secondary"], padding=(14, 8), font=medium_font)
+    style.map("TNotebook.Tab", background=[("selected", palette["surface_selected"]), ("active", palette["surface_hover"])], foreground=[("selected", palette["accent"]), ("active", palette["text_primary"])])
+    style.configure("TSeparator", background=palette["border"])
     # ttk's pop-down Listbox is a Tk widget, not a ttk style.  Configure it
     # explicitly so a closed readonly field and its opened list remain legible.
     root.option_add("*TCombobox*Listbox.background", palette["surface"])

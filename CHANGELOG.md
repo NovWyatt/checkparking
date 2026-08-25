@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.9.7 — Đối chiếu Excel và giao diện hiện đại
+
+- Thêm không gian **Đối chiếu** để so kết quả OCR đã duyệt với danh sách báo phí và, khi cần, danh sách phần mềm.
+- Tạo sẵn file mẫu Báo phí/Phần mềm có cột `Biển số`; file nguồn chỉ được đọc, không bị chỉnh sửa.
+- Dò khớp chính xác trước, sau đó chỉ chấp nhận khớp gần một ký tự khi có đúng một ứng viên và khớp 3 hoặc 4 số cuối theo lựa chọn. Trường hợp mơ hồ, thiếu/dư số hoặc sai khác lớn được tách vào `Cần_xác_nhận`.
+- Báo cáo Excel phân nhóm khớp báo phí, phần mềm không có báo phí, không có trên cả hai nguồn, trùng lặp và các dòng dư để dễ kiểm tra thủ công.
+- Làm mới giao diện quét, kết quả và cài đặt theo hệ màu sáng/tối nhất quán; giữ nguyên luồng quét, duyệt và xuất Excel hiện có.
+
 ## 1.9.6 — Detector miễn phí, đóng gói và kiểm chứng
 
 - Thay detector YOLOv9 có nguồn weights chưa đủ rõ quyền phân phối bằng OpenCV Zoo YuNet Apache-2.0, được đóng gói trong ứng dụng với license, attribution, commit nguồn và SHA-256 đã pin.

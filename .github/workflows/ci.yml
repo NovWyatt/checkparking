@@ -57,7 +57,8 @@ jobs:
             'tests\hybrid_progress_policy_test.py', 'tests\hybrid_pipeline_test.py', 'tests\false_positive_regression_test.py', 'tests\release_v180_test.py',
             'tests\v190_tesseract_component_test.py', 'tests\v190_candidate_scoring_test.py', 'tests\v190_runtime_version_test.py',
             'tests\ocr_process_worker_test.py', 'tests\ocr_process_app_integration_test.py',
-            'tests\ocr_process_import_boundary_test.py', 'tests\ocr_process_heartbeat_test.py'
+            'tests\ocr_process_import_boundary_test.py', 'tests\ocr_process_heartbeat_test.py',
+            'tests\reconciliation_test.py'
           )
           foreach ($test in $tests) {
             Write-Host "RUN $test"
