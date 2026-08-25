@@ -41,6 +41,7 @@ from .plate_formatting import DetectedPlateFormat, PlateFormatStatus, PlateType,
 from .processor import process_image
 from .providers import OpenAICompatibleProvider, ProviderConfig, ProviderStatus, redact_provider_error
 from .reconciliation import ReconciliationError, export_reconciliation_report, reconcile_workbooks, write_reconciliation_template
+from .results_import import ResultsImportError, load_exported_results
 from .services.progress_service import BatchProgress, BatchStatus
 from .services.ocr_process import OcrProcessClient, OcrProcessCrashed, OcrProcessError, OcrProcessTask
 from .services.worker_manager import WorkItem, WorkerManager, WorkerSettings
@@ -259,6 +260,7 @@ class CheckVehicleApp(tk.Tk):
         self._result_sort_column = "file"
         self._result_sort_descending = False
         self.detail_row_vars: list[tuple[PlateCandidate, tk.StringVar, tk.BooleanVar, str]] = []
+        self.detail_plate_entries: list[ttk.Entry] = []
         self.current_detail_result: ImageResult | None = None
         self.selected_image_path: Path | None = None
         self.preview_photo = None
@@ -266,6 +268,7 @@ class CheckVehicleApp(tk.Tk):
         self.event_queue: queue.Queue = queue.Queue()
         self.worker: threading.Thread | None = None
         self.export_worker: threading.Thread | None = None
+        self.results_import_worker: threading.Thread | None = None
         self.reconciliation_worker: threading.Thread | None = None
         self.stop_event = threading.Event()
         self.retry_failed_before_count = 0
@@ -1943,6 +1946,26 @@ class CheckVehicleApp(tk.Tk):
                     self._log(f"Lỗi đối chiếu Excel: {message}")
                     self._notify(f"Không tạo được báo cáo đối chiếu: {message}", "error")
                     self.refresh_reconciliation_controls()
+                elif kind == "results_import_done":
+                    _, imported_results, workbook_path = event
+                    self.results = imported_results
+                    self.images = [result.image_path for result in imported_results]
+                    self.current_batch_session = None
+                    self.selected_image_path = None
+                    self.current_detail_result = None
+                    self.detail_row_vars.clear()
+                    self._refresh_table()
+                    self._update_stats()
+                    self._set_export_buttons_state("normal")
+                    self._set_review_buttons(bool(imported_results))
+                    self.show_page("results")
+                    self.status_var.set(f"Đã mở {len(imported_results)} ảnh từ Excel")
+                    self._log(f"Đã mở lại Kết quả từ Excel: {workbook_path}")
+                    self._notify("Đã khôi phục Kết quả từ Excel. Có thể tìm kiếm và xuất lại.", "success")
+                elif kind == "results_import_error":
+                    _, message = event
+                    self.status_var.set("Không mở được Excel")
+                    self._notify(message, "error")
                 elif kind == "provider_status":
                     _, status, values = event
                     self._apply_provider_status(status, values)
@@ -2327,6 +2350,33 @@ class CheckVehicleApp(tk.Tk):
 
     def choose_reconciliation_ocr_file(self) -> None:
         self._choose_reconciliation_file(self.reconciliation_ocr_path_var, "Chọn file Excel OCR đã xuất")
+
+    def choose_exported_results_file(self) -> None:
+        if self.results_import_worker and self.results_import_worker.is_alive():
+            return
+        selected = filedialog.askopenfilename(title="Mở file Excel đã xuất", filetypes=[("Excel", "*.xlsx")])
+        if not selected:
+            return
+        self._save_detail_edits()
+        self.status_var.set("Đang mở Kết quả từ Excel ở nền...")
+        self.results_import_worker = threading.Thread(
+            target=self._worker_import_exported_results,
+            args=(Path(selected),),
+            daemon=True,
+            name="check_vehicle_results_import",
+        )
+        self.results_import_worker.start()
+
+    def _worker_import_exported_results(self, workbook_path: Path) -> None:
+        try:
+            imported = load_exported_results(workbook_path)
+        except (ResultsImportError, OSError, ValueError) as exc:
+            self.event_queue.put(("results_import_error", str(exc)))
+            return
+        except Exception:
+            self.event_queue.put(("results_import_error", "Không thể mở file Excel này vào Kết quả."))
+            return
+        self.event_queue.put(("results_import_done", imported, workbook_path))
 
     def choose_reconciliation_fee_file(self) -> None:
         self._choose_reconciliation_file(self.reconciliation_fee_path_var, "Chọn file Excel báo phí")
@@ -3468,6 +3518,7 @@ class CheckVehicleApp(tk.Tk):
         path = result.image_path if result else fallback_path
         self.current_detail_result = result
         self.detail_row_vars.clear()
+        self.detail_plate_entries.clear()
         if not hasattr(self, "plates_frame"):
             return
         for child in self.plates_frame.winfo_children():
@@ -3532,15 +3583,23 @@ class CheckVehicleApp(tk.Tk):
             label.configure(image="", text=f"Không mở được crop\n{exc}")
 
     def _render_plate_rows(self, result: ImageResult) -> None:
-        headers = ("OK", "Sửa thủ công", "Thông tin biển số", "")
-        for column, header in enumerate(headers):
-            ttk.Label(self.plates_frame, text=header, style="SurfaceMuted.TLabel").grid(row=0, column=column, sticky="w", padx=(0, 8), pady=(0, 4))
         for row_index, plate in enumerate(result.plates, start=1):
             approved_var = tk.BooleanVar(value=plate.review_approved)
             text_var = tk.StringVar(value=plate.final_text)
             self.detail_row_vars.append((plate, text_var, approved_var, plate.final_text))
-            ttk.Checkbutton(self.plates_frame, variable=approved_var).grid(row=row_index, column=0, sticky="n", padx=(0, 8), pady=4)
-            ttk.Entry(self.plates_frame, textvariable=text_var, width=24).grid(row=row_index, column=1, sticky="ew", pady=4)
+            row = ttk.Frame(self.plates_frame, style="Surface.TFrame")
+            row.grid(row=row_index, column=0, sticky="ew", pady=(0, 10))
+            row.columnconfigure(1, weight=1)
+            ttk.Checkbutton(row, text="Đã kiểm tra", variable=approved_var).grid(row=0, column=0, sticky="w", pady=(0, 5))
+            ttk.Label(row, text=f"Biển số {row_index}", style="Surface.TLabel").grid(row=0, column=1, sticky="w", padx=(10, 0), pady=(0, 5))
+            ttk.Button(row, text="Xóa", command=lambda plate=plate: self.delete_current_plate(plate)).grid(
+                row=0, column=2, sticky="e", padx=(10, 0), pady=(0, 5)
+            )
+            ttk.Label(row, text="Sửa hoặc nhập biển số", style="SurfaceMuted.TLabel").grid(row=1, column=0, columnspan=3, sticky="w", pady=(0, 3))
+            entry = ttk.Entry(row, textvariable=text_var, width=42, style="Plate.TEntry")
+            entry.grid(row=2, column=0, columnspan=3, sticky="ew", pady=(0, 7))
+            entry.bind("<Control-a>", lambda event: (event.widget.selection_range(0, "end"), "break")[1])
+            self.detail_plate_entries.append(entry)
             detail = (
                 f"OCR nguyên bản: {plate.raw_text or plate.text or '—'}\n"
                 f"Chuỗi đã làm sạch: {plate.cleaned_text or '—'}\n"
@@ -3558,16 +3617,11 @@ class CheckVehicleApp(tk.Tk):
                 detail += f"\nMơ hồ: {', '.join(plate.ambiguity_flags)}"
             if plate.reason:
                 detail += f" | {plate.reason}"
-            ttk.Label(self.plates_frame, text=detail, style="SurfaceMuted.TLabel", wraplength=240).grid(
-                row=row_index, column=2, sticky="w", padx=(8, 0), pady=4
-            )
-            ttk.Button(self.plates_frame, text="Xóa", command=lambda plate=plate: self.delete_current_plate(plate)).grid(
-                row=row_index, column=3, sticky="ew", padx=(8, 0), pady=4
-            )
+            ttk.Label(row, text=detail, style="SurfaceMuted.TLabel", wraplength=440, justify="left").grid(row=3, column=0, columnspan=3, sticky="w")
         if result.rejected_candidates or result.pipeline_metrics:
             debug_row = len(result.plates) + 1
             debug = ttk.LabelFrame(self.plates_frame, text="Chẩn đoán candidate", style="Card.TLabelframe")
-            debug.grid(row=debug_row, column=0, columnspan=4, sticky="ew", pady=(8, 0))
+            debug.grid(row=debug_row, column=0, sticky="ew", pady=(8, 0))
             debug.columnconfigure(0, weight=1)
             body = ttk.Frame(debug, style="Surface.TFrame")
 
@@ -3601,7 +3655,7 @@ class CheckVehicleApp(tk.Tk):
 
             toggle = ttk.Button(debug, text="Hiện chẩn đoán", command=toggle_debug)
             toggle.grid(row=0, column=0, sticky="w", padx=6, pady=4)
-        self.plates_frame.columnconfigure(1, weight=1)
+        self.plates_frame.columnconfigure(0, weight=1)
 
     def delete_current_plate(self, plate: PlateCandidate) -> None:
         result = self.current_detail_result

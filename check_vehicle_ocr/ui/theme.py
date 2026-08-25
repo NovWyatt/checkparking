@@ -139,6 +139,21 @@ def configure_styles(root: tk.Misc, palette: dict[str, str], *, initialize_theme
         fieldbackground=[("disabled", palette["disabled_surface"]), ("readonly", palette["surface"]), ("focus", palette["surface"])],
         bordercolor=[("focus", palette["accent"]), ("disabled", palette["border"])],
     )
+    style.configure(
+        "Plate.TEntry",
+        fieldbackground=palette["surface_raised"],
+        foreground=palette["text_primary"],
+        insertcolor=palette["text_primary"],
+        bordercolor=palette["border"],
+        font=("Segoe UI Semibold", 14),
+        padding=(10, 7),
+    )
+    style.map(
+        "Plate.TEntry",
+        fieldbackground=[("focus", palette["surface"]), ("disabled", palette["disabled_surface"])],
+        foreground=[("disabled", palette["disabled_text"])],
+        bordercolor=[("focus", palette["accent"]), ("disabled", palette["border"])],
+    )
     combobox_options = {
         "fieldbackground": palette["surface"],
         "foreground": palette["text_primary"],

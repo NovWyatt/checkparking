@@ -66,6 +66,8 @@ def main() -> int:
             app.show_page("reconciliation")
             reconciliation_texts = "\n".join(_widget_texts(app.shell.pages["reconciliation"]))
             assert "Tải mẫu báo phí" in reconciliation_texts and "Đối chiếu thêm với phần mềm" in reconciliation_texts
+            assert app.reconciliation_fee_file_button.cget("text") == "Chọn file"
+            assert app.reconciliation_software_file_button.cget("text") == "Chọn file"
             app.show_page("scan")
             app.plate_type_var.set("Xe máy")
             assert "59X1-12345" in app.plate_type_hint_var.get()
@@ -102,6 +104,11 @@ def main() -> int:
             image_path = Path(appdata) / "batch.jpg"
             app.images = [image_path]
             app.results = [ImageResult(image_path=image_path, status="OK", reason="", plates=[standard, special], selected_plate_type=PlateType.MOTORCYCLE)]
+            app._render_detail(app.results[0])
+            app.update_idletasks()
+            assert len(app.detail_plate_entries) == 2
+            assert all(entry.cget("style") == "Plate.TEntry" for entry in app.detail_plate_entries)
+            assert all(entry.winfo_width() >= 300 for entry in app.detail_plate_entries)
             app.result_filter_var.set("Biển đặc biệt")
             assert app._filtered_sorted_images() == [image_path]
             app.result_filter_var.set("Đã định dạng")

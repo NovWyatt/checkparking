@@ -34,10 +34,16 @@ class ReconciliationPage(Page):
             text="Chọn file OCR đã duyệt, sau đó chọn báo phí. Phần mềm là tùy chọn.",
             style="SurfaceMuted.TLabel",
             wraplength=900,
-        ).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 10))
+        ).grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 10))
 
         self._file_row(card, 1, "File OCR đã xuất", controller.reconciliation_ocr_path_var, controller.choose_reconciliation_ocr_file)
-        self._file_row(card, 2, "File báo phí", controller.reconciliation_fee_path_var, controller.choose_reconciliation_fee_file)
+        _fee_entry, controller.reconciliation_fee_file_button = self._file_row(
+            card,
+            2,
+            "File báo phí",
+            controller.reconciliation_fee_path_var,
+            controller.choose_reconciliation_fee_file,
+        )
         ttk.Button(card, text="Tải mẫu báo phí", command=controller.download_fee_template).grid(row=2, column=3, sticky="e", padx=(8, 0), pady=4)
 
         controller.reconciliation_software_toggle = ttk.Checkbutton(
@@ -47,13 +53,14 @@ class ReconciliationPage(Page):
             command=self._sync_software_controls,
         )
         controller.reconciliation_software_toggle.grid(row=3, column=0, columnspan=4, sticky="w", pady=(10, 2))
-        self.software_entry, self.software_button = self._file_row(
+        self.software_entry, controller.reconciliation_software_file_button = self._file_row(
             card,
             4,
             "File phần mềm",
             controller.reconciliation_software_path_var,
             controller.choose_reconciliation_software_file,
         )
+        self.software_button = controller.reconciliation_software_file_button
         self.software_template_button = ttk.Button(card, text="Tải mẫu phần mềm", command=controller.download_software_template)
         self.software_template_button.grid(row=4, column=3, sticky="e", padx=(8, 0), pady=4)
         ttk.Label(
@@ -67,9 +74,9 @@ class ReconciliationPage(Page):
     def _file_row(parent, row, label, variable, command):
         ttk.Label(parent, text=label, style="Surface.TLabel").grid(row=row, column=0, sticky="w", pady=4)
         entry = ttk.Entry(parent, textvariable=variable, state="readonly")
-        entry.grid(row=row, column=1, columnspan=2, sticky="ew", pady=4)
+        entry.grid(row=row, column=1, sticky="ew", pady=4)
         button = ttk.Button(parent, text="Chọn file", command=command)
-        button.grid(row=row, column=3, sticky="e", padx=(8, 0), pady=4)
+        button.grid(row=row, column=2, sticky="e", padx=(8, 0), pady=4)
         return entry, button
 
     def _build_rules_card(self, parent, controller) -> None:

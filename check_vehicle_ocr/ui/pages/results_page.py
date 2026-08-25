@@ -12,8 +12,8 @@ class ResultsPage(Page):
 
     def __init__(self, parent, controller):
         super().__init__(parent, controller)
-        self.columnconfigure(0, weight=1, minsize=400)
-        self.columnconfigure(1, weight=0, minsize=400)
+        self.columnconfigure(0, weight=1, minsize=360)
+        self.columnconfigure(1, weight=1, minsize=460)
         self.rowconfigure(1, weight=1)
 
         metrics = ttk.Frame(self, style="App.TFrame")
@@ -70,15 +70,17 @@ class ResultsPage(Page):
         controller.export_button = ttk.Button(actions, text="Xuất Excel", command=controller.export_selected_results, state="disabled", style="Primary.TButton")
         controller.export_button.grid(row=0, column=0, sticky="ew", padx=(0, 4))
         ttk.Button(actions, text="Quét batch mới", command=lambda: controller.show_page("scan")).grid(row=0, column=1, sticky="ew", padx=(4, 0))
+        controller.import_results_button = ttk.Button(actions, text="Mở Excel đã xuất", command=controller.choose_exported_results_file)
+        controller.import_results_button.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(7, 0))
         controller.reformat_results_button = ttk.Button(
             actions,
             text="Áp dụng lại định dạng cho kết quả hiện tại",
             command=controller.reformat_current_results,
         )
-        controller.reformat_results_button.grid(row=1, column=0, columnspan=2, sticky="w", pady=(7, 0))
+        controller.reformat_results_button.grid(row=2, column=0, columnspan=2, sticky="w", pady=(7, 0))
         controller.reformat_results_button.grid_remove()
         controller.reformat_hint_label = ttk.Label(actions, textvariable=controller.reformat_hint_var, style="SurfaceMuted.TLabel", wraplength=420)
-        controller.reformat_hint_label.grid(row=2, column=0, columnspan=2, sticky="w", pady=(3, 0))
+        controller.reformat_hint_label.grid(row=3, column=0, columnspan=2, sticky="w", pady=(3, 0))
         controller.reformat_hint_label.grid_remove()
         ttk.Checkbutton(parent, text="Chỉ xuất biển số đã xác nhận", variable=controller.export_reviewed_only_var).grid(row=3, column=0, sticky="w", pady=(8, 0))
 
@@ -122,11 +124,11 @@ class ResultsPage(Page):
             crop_holder, bg=controller.colors["preview"], fg=controller.colors["on_accent"], text="Chưa có crop", compound="center"
         )
         controller.crop_preview_label.pack(fill="both", expand=True, pady=(4, 0))
-        ttk.Label(parent, text="Thông tin nhận diện", style="Section.TLabel").grid(row=3, column=0, sticky="w", pady=(0, 6))
+        ttk.Label(parent, text="Thông tin và chỉnh sửa biển số", style="Section.TLabel").grid(row=3, column=0, sticky="w", pady=(0, 6))
         frame = ttk.Frame(parent, style="Surface.TFrame")
         frame.grid(row=4, column=0, sticky="ew")
         frame.columnconfigure(0, weight=1)
-        controller.plate_canvas = tk.Canvas(frame, height=172, bg=controller.colors["surface"], highlightthickness=0)
+        controller.plate_canvas = tk.Canvas(frame, height=218, bg=controller.colors["surface"], highlightthickness=0)
         controller.plate_canvas.grid(row=0, column=0, sticky="ew")
         scroll = ttk.Scrollbar(frame, orient="vertical", command=controller.plate_canvas.yview)
         scroll.grid(row=0, column=1, sticky="ns")

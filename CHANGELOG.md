@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.9.8 - Mở lại Kết quả từ Excel
+
+- Thêm nút **Mở Excel đã xuất** trong Kết quả. File `.xlsx` do Check Vehicle OCR xuất có thể được mở lại để tìm kiếm, xem, sửa và xuất lại mà không phải OCR lại ảnh.
+- Dữ liệu được đọc từ sheet `Theo_tung_anh` theo chế độ chỉ đọc; ứng dụng không thay đổi file Excel nguồn.
+- Sửa giao diện Đối chiếu: nút **Chọn file** và **Tải mẫu** của Báo phí/Phần mềm luôn xuất hiện riêng biệt.
+- Cải thiện ô sửa biển số thủ công: ô lớn toàn chiều ngang, font rõ hơn và hỗ trợ `Ctrl+A` để thay nhanh.
+
 ## 1.9.7 — Đối chiếu Excel và giao diện hiện đại
 
 - Thêm không gian **Đối chiếu** để so kết quả OCR đã duyệt với danh sách báo phí và, khi cần, danh sách phần mềm.

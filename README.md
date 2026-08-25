@@ -8,7 +8,7 @@
 
 Ứng dụng Windows giúp quét hàng loạt ảnh phương tiện, nhận diện biển số, kiểm tra kết quả và xuất Excel.
 
-**Phiên bản ổn định hiện tại:** v1.9.7
+**Phiên bản ổn định hiện tại:** v1.9.8
 
 [**⬇️ Tải bản mới nhất**](https://github.com/NovWyatt/checkparking/releases/latest)
 
@@ -78,6 +78,8 @@ Tải `CheckVehicleOCR-Portable-<version>.zip`, giải nén vào một thư mụ
 6. Bấm **Bắt đầu quét**, sau đó xem và sửa các kết quả cần kiểm tra.
 7. Bấm **Xuất Excel** khi đã sẵn sàng.
 8. Mở **Đối chiếu** để so kết quả OCR với báo phí, và tùy chọn so thêm với phần mềm.
+
+Khi cần tra cứu batch cũ, vào **Kết quả** và bấm **Mở Excel đã xuất**. Chọn file `.xlsx` do ứng dụng đã xuất để đưa danh sách trở lại màn Kết quả, sau đó tìm kiếm, xem và sửa biển số như bình thường.
 
 ## Các chế độ quét
 
