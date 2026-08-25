@@ -47,18 +47,36 @@ def main() -> int:
         _write_source(
             ocr,
             "Biển số xuất Excel",
-            ["30A-123.45", "51F-123.45", "59X1-999.99", "43A-111.11", "30A-555.55", "50A-222.22"],
+            [
+                "30A-123.45",
+                "51F-123.45",
+                "59X1-999.99",
+                "43A-111.11",
+                "30A-555.55",
+                "50A-222.22",
+                "30A-765.43",
+                "30A-987.65",
+            ],
         )
         _write_source(
             fee,
             "Biển số",
-            ["30A12345", "30A12345", "51F-123.46", "30A-555.54", "30A-555.56", "60A-000.01", "=SUM(A1:A2)"],
+            [
+                "30A12345",
+                "30A12345",
+                "51F-123.46",
+                "30A-555.54",
+                "30A-555.56",
+                "30A-765.3",
+                "60A-000.01",
+                "=SUM(A1:A2)",
+            ],
         )
-        _write_source(software, "Biển số", ["59X1-999.99", "50A-222.23", "70A-000.01"])
+        _write_source(software, "Biển số", ["59X1-999.99", "50A-222.23", "30A-9876.65", "70A-000.01"])
 
         report = reconcile_workbooks(ocr, fee, software, suffix_length=4)
-        if len(report.rows) != 6:
-            raise AssertionError(f"Phải đọc 6 biển OCR, nhận được {len(report.rows)}")
+        if len(report.rows) != 8:
+            raise AssertionError(f"Phải đọc 8 biển OCR, nhận được {len(report.rows)}")
         statuses = [(row.fee.status, row.software.status, row.conclusion) for row in report.rows]
         expected = [
             ("exact", "skipped", "Khớp báo phí"),
@@ -67,9 +85,15 @@ def main() -> int:
             ("missing", "missing", "Không có trên cả hai nguồn"),
             ("ambiguous", "missing", "Cần xác nhận báo phí"),
             ("missing", "near", "Có gần đúng phần mềm, không báo phí"),
+            ("near", "skipped", "Khớp gần báo phí"),
+            ("missing", "near", "Có gần đúng phần mềm, không báo phí"),
         ]
         if statuses != expected:
             raise AssertionError(f"Phân loại đối chiếu sai: {statuses}")
+        if "Thiếu hoặc dư 1 ký tự" not in report.rows[6].fee.note:
+            raise AssertionError("Thiếu một ký tự ở báo phí phải được nhận diện là khớp gần")
+        if "Thiếu hoặc dư 1 ký tự" not in report.rows[7].software.note:
+            raise AssertionError("Dư một ký tự ở phần mềm phải được nhận diện là khớp gần")
         if not any(source == "Báo phí" and normalized == "30A12345" for source, normalized, _records in report.duplicates):
             raise AssertionError("Phải báo biển trùng trong nguồn báo phí")
 
@@ -92,8 +116,8 @@ def main() -> int:
             raise AssertionError(f"Thiếu sheet báo cáo: {workbook.sheetnames}")
         if workbook["Kết_quả_chính"]["M2"].value != "Khớp báo phí":
             raise AssertionError("Sheet kết quả chính không giữ kết luận đối chiếu")
-        if workbook["Khớp_gần_báo_phí"].max_row != 2:
-            raise AssertionError("Khớp gần báo phí phải được tách thành sheet riêng")
+        if workbook["Khớp_gần_báo_phí"].max_row != 3:
+            raise AssertionError("Các khớp gần báo phí phải được tách thành sheet riêng")
         workbook.close()
 
         fee_only = reconcile_workbooks(ocr, fee, suffix_length=3)

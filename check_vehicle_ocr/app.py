@@ -265,6 +265,7 @@ class CheckVehicleApp(tk.Tk):
         self.selected_image_path: Path | None = None
         self.preview_photo = None
         self.crop_preview_photo = None
+        self._preview_resize_after: str | None = None
         self.event_queue: queue.Queue = queue.Queue()
         self.worker: threading.Thread | None = None
         self.export_worker: threading.Thread | None = None
@@ -3556,12 +3557,31 @@ class CheckVehicleApp(tk.Tk):
         try:
             image = Image.open(image_path)
             image = ImageOps.exif_transpose(image).convert("RGB")
-            image.thumbnail((340, 250), Image.Resampling.LANCZOS)
+            width = self.preview_label.winfo_width() - 16
+            height = self.preview_label.winfo_height() - 16
+            maximum_size = (width, height) if width >= 180 and height >= 140 else (620, 460)
+            image.thumbnail(maximum_size, Image.Resampling.LANCZOS)
             self.preview_photo = ImageTk.PhotoImage(image)
             self.preview_label.configure(image=self.preview_photo, text="")
         except Exception as exc:
             self.preview_photo = None
             self.preview_label.configure(image="", text=f"Không hiển thị được ảnh\n{exc}")
+
+    def _schedule_preview_resize(self, _event=None) -> None:
+        """Refit the original image after the operator moves the detail sash."""
+
+        path = self.selected_image_path
+        if path is None or not path.is_file():
+            return
+        if self._preview_resize_after is not None:
+            self.after_cancel(self._preview_resize_after)
+        self._preview_resize_after = self.after(120, self._reload_preview_after_resize)
+
+    def _reload_preview_after_resize(self) -> None:
+        self._preview_resize_after = None
+        path = self.selected_image_path
+        if path is not None and path.is_file():
+            self._load_preview(path)
 
     def _load_crop_preview(self, result: ImageResult | None) -> None:
         label = getattr(self, "crop_preview_label", None)
@@ -3575,7 +3595,7 @@ class CheckVehicleApp(tk.Tk):
         try:
             image = Image.open(crop_path)
             image = ImageOps.exif_transpose(image).convert("RGB")
-            image.thumbnail((140, 90), Image.Resampling.LANCZOS)
+            image.thumbnail((150, 100), Image.Resampling.LANCZOS)
             self.crop_preview_photo = ImageTk.PhotoImage(image)
             label.configure(image=self.crop_preview_photo, text="")
         except Exception as exc:

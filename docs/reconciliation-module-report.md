@@ -16,8 +16,9 @@ Thêm mô-đun đối chiếu cho quy trình biển số đã OCR và duyệt: d
 
 - Luôn chuẩn hóa bằng cách viết hoa và bỏ khoảng trắng, dấu gạch, dấu chấm. Giá trị gốc vẫn được giữ trong báo cáo.
 - Khớp chính xác báo phí được xử lý trước. Những biển đã khớp hoàn toàn hoặc khớp gần báo phí không được dò sang phần mềm.
-- Khớp gần chỉ được chấp nhận khi có một ứng viên duy nhất, sai tối đa một ký tự và còn trùng số vị trí ký tự cuối theo lựa chọn 3 hoặc 4 ký tự, trừ tối đa một ký tự.
-- Thiếu/dư ký tự, nhiều ứng viên hoặc khác biệt không đủ điều kiện được đưa vào sheet `Cần_xác_nhận`.
+- OCR đã duyệt luôn là nguồn gốc. Báo phí được dò trước; chỉ các biển chưa khớp báo phí mới dò sang phần mềm.
+- Khớp gần chỉ được chấp nhận khi có một ứng viên duy nhất, sai tối đa một ký tự, gồm sai ký tự, thiếu hoặc dư một ký tự. Phần đuôi được canh chỉnh bằng chuỗi con chung dài nhất trước khi áp dụng ngưỡng 3 hoặc 4 ký tự, tránh bỏ sót vì lệch vị trí.
+- Nhiều ứng viên hoặc khác biệt lớn hơn một ký tự được đưa vào sheet `Cần_xác_nhận`.
 - Báo cáo tách `Khớp_báo_phí`, `Khớp_gần_báo_phí`, `Phần_mềm_không_báo_phí`, `Không_có_cả_hai`, `Trùng_lặp`, `Dư_báo_phí` và `Dư_phần_mềm` khi có chọn phần mềm.
 
 ## Kiểm tra đã chạy

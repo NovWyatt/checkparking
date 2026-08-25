@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.9.9 - Xem ảnh lớn và đối chiếu chịu lỗi nhập liệu
+
+- Màn Kết quả có vùng xem ảnh lớn hơn, tự co vừa ảnh và thanh kéo để ưu tiên xem ảnh hoặc chỉnh biển số.
+- Xác định Excel OCR đã duyệt là nguồn gốc; chỉ đối chiếu báo phí rồi mới dò phần mềm cho các biển chưa khớp.
+- Khớp gần nhận đúng trường hợp báo phí/phần mềm sai, thiếu hoặc dư đúng một ký tự khi chỉ có một ứng viên hợp lệ; phần đuôi 3 hoặc 4 ký tự được canh chỉnh để không bị lệch vị trí.
+- Nhiều ứng viên hoặc khác biệt lớn hơn một ký tự tiếp tục được tách vào `Cần_xác_nhận`.
+
 ## 1.9.8 - Mở lại Kết quả từ Excel
 
 - Thêm nút **Mở Excel đã xuất** trong Kết quả. File `.xlsx` do Check Vehicle OCR xuất có thể được mở lại để tìm kiếm, xem, sửa và xuất lại mà không phải OCR lại ảnh.

@@ -31,7 +31,7 @@ class ReconciliationPage(Page):
         card.columnconfigure(1, weight=1)
         ttk.Label(
             card,
-            text="Chọn file OCR đã duyệt, sau đó chọn báo phí. Phần mềm là tùy chọn.",
+            text="OCR đã duyệt là danh sách gốc. Chỉ dò báo phí trước, sau đó mới dò phần mềm khi cần.",
             style="SurfaceMuted.TLabel",
             wraplength=900,
         ).grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 10))
@@ -93,13 +93,13 @@ class ReconciliationPage(Page):
         )
         ttk.Label(
             card,
-            text="Khớp hoàn toàn được dò trước. Khớp gần chỉ được chấp nhận khi có đúng một ứng viên, sai tối đa một ký tự và còn trùng ít nhất 2 hoặc 3 ký tự cuối theo lựa chọn.",
+            text="Khớp hoàn toàn được dò trước. Khớp gần chỉ được chấp nhận khi có đúng một ứng viên, sai tối đa một ký tự (kể cả thiếu hoặc dư) và vẫn trùng ít nhất 2 hoặc 3 ký tự cuối sau khi canh chỉnh.",
             style="SurfaceMuted.TLabel",
             wraplength=900,
         ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(6, 0))
         ttk.Label(
             card,
-            text="Trường hợp thiếu hoặc dư ký tự, sai khác lớn hơn một ký tự hay có nhiều ứng viên sẽ được đưa vào sheet Cần_xác_nhận.",
+            text="Sai khác lớn hơn một ký tự hoặc có nhiều ứng viên sẽ được đưa vào sheet Cần_xác_nhận. Báo phí/phần mềm không bao giờ thay thế dữ liệu OCR đã duyệt.",
             style="SurfaceMuted.TLabel",
             wraplength=900,
         ).grid(row=2, column=0, columnspan=2, sticky="w", pady=(4, 0))

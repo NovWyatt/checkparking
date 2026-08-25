@@ -371,19 +371,25 @@ def _find_match(
         )
 
     target = one_edit[0]
-    tail_matches = _tail_position_matches(record.normalized_text, target.normalized_text, suffix_length)
+    tail_matches = _tail_alignment_matches(record.normalized_text, target.normalized_text, suffix_length)
     difference = _difference_note(record.normalized_text, target.normalized_text)
     if tail_matches >= suffix_length - 1:
         return PlateMatch(
             "near",
             target=target,
-            note=f"Khớp gần được chấp nhận: {difference}; trùng {tail_matches}/{suffix_length} ký tự cuối.",
+            note=(
+                f"Khớp gần được chấp nhận: {difference}; trùng {tail_matches}/{suffix_length} ký tự cuối "
+                "sau khi canh chỉnh."
+            ),
             candidates=(target,),
         )
     return PlateMatch(
         "review",
         target=target,
-        note=f"{difference}; chỉ trùng {tail_matches}/{suffix_length} ký tự cuối nên cần xác nhận thủ công.",
+        note=(
+            f"{difference}; chỉ trùng {tail_matches}/{suffix_length} ký tự cuối sau khi canh chỉnh "
+            "nên cần xác nhận thủ công."
+        ),
         candidates=(target,),
     )
 
@@ -402,10 +408,27 @@ def _levenshtein_distance(left: str, right: str) -> int:
     return previous[-1]
 
 
-def _tail_position_matches(left: str, right: str, suffix_length: int) -> int:
+def _tail_alignment_matches(left: str, right: str, suffix_length: int) -> int:
+    """Return the shared tail length while tolerating one inserted/deleted character.
+
+    OCR is the reviewed source of truth.  A one-character omission or addition
+    in a fee/software workbook shifts tail positions, so positional comparison
+    would reject a valid unique match.  The longest common subsequence keeps the
+    same conservative ``suffix_length - 1`` threshold without that false reject.
+    """
+
     left_tail = left[-suffix_length:]
     right_tail = right[-suffix_length:]
-    return sum(first == second for first, second in zip(left_tail.rjust(suffix_length), right_tail.rjust(suffix_length)))
+    previous = [0] * (len(right_tail) + 1)
+    for left_character in left_tail:
+        current = [0]
+        for index, right_character in enumerate(right_tail, start=1):
+            if left_character == right_character:
+                current.append(previous[index - 1] + 1)
+            else:
+                current.append(max(previous[index], current[-1]))
+        previous = current
+    return previous[-1]
 
 
 def _difference_note(left: str, right: str) -> str:

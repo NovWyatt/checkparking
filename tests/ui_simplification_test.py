@@ -66,6 +66,7 @@ def main() -> int:
             app.show_page("reconciliation")
             reconciliation_texts = "\n".join(_widget_texts(app.shell.pages["reconciliation"]))
             assert "Tải mẫu báo phí" in reconciliation_texts and "Đối chiếu thêm với phần mềm" in reconciliation_texts
+            assert "OCR đã duyệt là danh sách gốc" in reconciliation_texts
             assert app.reconciliation_fee_file_button.cget("text") == "Chọn file"
             assert app.reconciliation_software_file_button.cget("text") == "Chọn file"
             app.show_page("scan")
@@ -97,6 +98,9 @@ def main() -> int:
 
             app.show_page("results")
             assert "results" in app.shell.pages and hasattr(app, "image_tree") and hasattr(app, "plates_frame")
+            results_page = app.shell.pages["results"]
+            assert int(results_page.grid_columnconfigure(1)["minsize"]) >= 620
+            assert app.results_detail_split.winfo_exists()
             standard = PlateCandidate(bbox=(0, 0, 1, 1), score=90, text="59X112345", raw_text="59X112345", readable=True)
             standard.apply_plate_formatting(PlateType.MOTORCYCLE)
             special = PlateCandidate(bbox=(0, 0, 1, 1), score=80, text="49MD112345", raw_text="49MD112345", readable=True)

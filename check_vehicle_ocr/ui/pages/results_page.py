@@ -12,8 +12,11 @@ class ResultsPage(Page):
 
     def __init__(self, parent, controller):
         super().__init__(parent, controller)
-        self.columnconfigure(0, weight=1, minsize=360)
-        self.columnconfigure(1, weight=1, minsize=460)
+        # Results are checked against the original photo, so the preview column
+        # intentionally gets more room than the list rather than splitting the
+        # operator workspace into two equally narrow panes.
+        self.columnconfigure(0, weight=1, minsize=340)
+        self.columnconfigure(1, weight=2, minsize=620)
         self.rowconfigure(1, weight=1)
 
         metrics = ttk.Frame(self, style="App.TFrame")
@@ -108,15 +111,24 @@ class ResultsPage(Page):
         parent.rowconfigure(2, weight=1)
         ttk.Label(parent, textvariable=controller.detail_title_var, style="Section.TLabel").grid(row=0, column=0, sticky="w")
         ttk.Label(parent, textvariable=controller.detail_meta_var, style="SurfaceMuted.TLabel", wraplength=520).grid(row=1, column=0, sticky="w", pady=(3, 8))
-        preview_holder = ttk.Frame(parent, style="Surface.TFrame")
-        preview_holder.grid(row=2, column=0, sticky="nsew", pady=(0, 10))
-        preview_holder.columnconfigure(0, weight=3, minsize=220)
-        preview_holder.columnconfigure(1, weight=1, minsize=130)
-        preview_holder.rowconfigure(0, weight=1)
+        controller.results_detail_split = ttk.Panedwindow(parent, orient="vertical")
+        controller.results_detail_split.grid(row=2, column=0, sticky="nsew")
+
+        preview_holder = ttk.Frame(controller.results_detail_split, style="Surface.TFrame", padding=(0, 0, 0, 8))
+        controller.results_detail_split.add(preview_holder, weight=3)
+        preview_holder.columnconfigure(0, weight=4, minsize=470)
+        preview_holder.columnconfigure(1, weight=1, minsize=145)
+        preview_holder.rowconfigure(0, weight=1, minsize=250)
         controller.preview_label = tk.Label(
-            preview_holder, bg=controller.colors["preview"], fg=controller.colors["on_accent"], text="Chọn một ảnh để xem", compound="center"
+            preview_holder,
+            bg=controller.colors["preview"],
+            fg=controller.colors["on_accent"],
+            text="Chọn một ảnh để xem",
+            compound="center",
+            height=15,
         )
         controller.preview_label.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
+        controller.preview_label.bind("<Configure>", controller._schedule_preview_resize)
         crop_holder = ttk.Frame(preview_holder, style="Surface.TFrame")
         crop_holder.grid(row=0, column=1, sticky="nsew")
         ttk.Label(crop_holder, text="Crop biển số", style="SurfaceMuted.TLabel").pack(anchor="w")
@@ -124,11 +136,16 @@ class ResultsPage(Page):
             crop_holder, bg=controller.colors["preview"], fg=controller.colors["on_accent"], text="Chưa có crop", compound="center"
         )
         controller.crop_preview_label.pack(fill="both", expand=True, pady=(4, 0))
-        ttk.Label(parent, text="Thông tin và chỉnh sửa biển số", style="Section.TLabel").grid(row=3, column=0, sticky="w", pady=(0, 6))
-        frame = ttk.Frame(parent, style="Surface.TFrame")
-        frame.grid(row=4, column=0, sticky="ew")
+
+        editor = ttk.Frame(controller.results_detail_split, style="Surface.TFrame", padding=(0, 8, 0, 0))
+        controller.results_detail_split.add(editor, weight=2)
+        editor.columnconfigure(0, weight=1)
+        editor.rowconfigure(1, weight=1)
+        ttk.Label(editor, text="Thông tin và chỉnh sửa biển số", style="Section.TLabel").grid(row=0, column=0, sticky="w", pady=(0, 6))
+        frame = ttk.Frame(editor, style="Surface.TFrame")
+        frame.grid(row=1, column=0, sticky="nsew")
         frame.columnconfigure(0, weight=1)
-        controller.plate_canvas = tk.Canvas(frame, height=218, bg=controller.colors["surface"], highlightthickness=0)
+        controller.plate_canvas = tk.Canvas(frame, height=168, bg=controller.colors["surface"], highlightthickness=0)
         controller.plate_canvas.grid(row=0, column=0, sticky="ew")
         scroll = ttk.Scrollbar(frame, orient="vertical", command=controller.plate_canvas.yview)
         scroll.grid(row=0, column=1, sticky="ns")
@@ -137,8 +154,8 @@ class ResultsPage(Page):
         controller.plate_canvas.configure(yscrollcommand=scroll.set)
         controller.plates_frame.bind("<Configure>", lambda _event: controller.plate_canvas.configure(scrollregion=controller.plate_canvas.bbox("all")))
         controller.plate_canvas.bind("<Configure>", lambda event: controller.plate_canvas.itemconfigure(controller.plate_canvas_window, width=event.width))
-        buttons = ttk.Frame(parent, style="Surface.TFrame")
-        buttons.grid(row=5, column=0, sticky="ew", pady=(10, 0))
+        buttons = ttk.Frame(editor, style="Surface.TFrame")
+        buttons.grid(row=2, column=0, sticky="ew", pady=(10, 0))
         buttons.columnconfigure((0, 1), weight=1)
         ttk.Button(buttons, text="Lưu chỉnh sửa", command=controller.save_detail_edits, style="Primary.TButton").grid(
             row=0, column=0, sticky="ew", padx=(0, 4), pady=(0, 6)
