@@ -55,11 +55,13 @@ function showLogin(message = "") {
 
 async function onLogin(event) {
   event.preventDefault();
-  const code = event.currentTarget.elements.code.value;
-  setBusy(event.currentTarget, true);
+  const form = event.currentTarget;
+  const codeControl = formControl(form, "code");
+  const code = codeControl.value;
+  setBusy(form, true);
   try {
     await api("/api/admin/login", { method: "POST", body: { code } });
-    event.currentTarget.elements.code.value = "";
+    codeControl.value = "";
     await showDashboard();
   } catch (error) {
     showLogin(messageFrom(error));
@@ -110,7 +112,7 @@ function buildIssuePanel() {
     field("Ghi chú", "note", element("textarea", { name: "note", rows: "2", maxlength: "240", placeholder: "Ví dụ: Công ty Minh Phát" })),
     element("div", { class: "issue-actions" }, [element("fluent-button", { appearance: "accent", type: "submit", text: "Tạo key" }), element("p", { class: "inline-status", id: "issue-status", text: "" })]),
   );
-  form.elements.licenseType.addEventListener("change", () => syncExpiryControl(form));
+  formControl(form, "licenseType").addEventListener("change", () => syncExpiryControl(form));
   section.append(form);
   return section;
 }
@@ -128,11 +130,18 @@ function select(name, options) {
   return control;
 }
 
+function formControl(form, name) {
+  const control = form.querySelector(`[name="${name}"]`);
+  if (!control) throw new Error(`Không tìm thấy trường biểu mẫu: ${name}`);
+  return control;
+}
+
 function syncExpiryControl(form) {
-  const isPerpetual = form.elements.licenseType.value === "perpetual";
-  form.elements.expiresAt.disabled = isPerpetual;
-  form.elements.expiresAt.required = !isPerpetual;
-  if (isPerpetual) form.elements.expiresAt.value = "";
+  const isPerpetual = formControl(form, "licenseType").value === "perpetual";
+  const expiresAt = formControl(form, "expiresAt");
+  expiresAt.disabled = isPerpetual;
+  expiresAt.required = !isPerpetual;
+  if (isPerpetual) expiresAt.value = "";
 }
 
 function buildListPanel() {
@@ -219,16 +228,24 @@ async function issueLicense(event) {
   setBusy(form, true);
   status.textContent = "Đang tạo key…";
   try {
+    const licenseType = formControl(form, "licenseType");
+    const expiresAt = formControl(form, "expiresAt");
+    const maxDevices = formControl(form, "maxDevices");
+    const note = formControl(form, "note");
     const result = await api("/api/admin/licenses", {
       method: "POST",
       body: {
-        licenseType: form.elements.licenseType.value,
-        expiresAt: form.elements.expiresAt.value,
-        maxDevices: form.elements.maxDevices.value,
-        note: form.elements.note.value,
+        licenseType: licenseType.value,
+        expiresAt: expiresAt.value,
+        maxDevices: maxDevices.value,
+        note: note.value,
       },
     });
     form.reset();
+    licenseType.value = "time";
+    expiresAt.value = "";
+    maxDevices.value = "1";
+    note.value = "";
     syncExpiryControl(form);
     status.textContent = "Đã tạo key.";
     showIssuedKey(result.key);
