@@ -7,6 +7,7 @@ test("admin UI reads Fluent controls through querySelector", async () => {
 
   assert.match(source, /function formControl\(form, name\)/);
   assert.match(source, /form\.querySelector\(`\[name="\$\{name\}"\]`\)/);
+  assert.match(source, /field\("Loại key", "licenseType", select\("licenseType",/);
   assert.doesNotMatch(source, /form\.elements\./);
   assert.doesNotMatch(source, /currentTarget\.elements\./);
 });

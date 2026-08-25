@@ -106,7 +106,7 @@ function buildIssuePanel() {
   const form = element("form", { class: "issue-form", onsubmit: issueLicense });
   form.append(
     element("div", { class: "panel-heading" }, [element("h2", { text: "Cấp key mới" }), element("p", { text: "Key chỉ hiển thị một lần sau khi tạo. Hãy sao chép và gửi cho người dùng ngay." })]),
-    field("Loại key", "licenseType", select("time", [["time", "Có thời hạn"], ["perpetual", "Vĩnh viễn"]])),
+    field("Loại key", "licenseType", select("licenseType", [["time", "Có thời hạn"], ["perpetual", "Vĩnh viễn"]])),
     field("Ngày hết hạn", "expiresAt", element("input", { type: "date", name: "expiresAt", required: "" })),
     field("Số thiết bị", "maxDevices", element("input", { type: "number", name: "maxDevices", min: "1", max: "10", value: "1", required: "" })),
     field("Ghi chú", "note", element("textarea", { name: "note", rows: "2", maxlength: "240", placeholder: "Ví dụ: Công ty Minh Phát" })),
