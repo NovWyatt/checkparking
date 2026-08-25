@@ -11,7 +11,7 @@ from typing import Any
 
 APP_DIR_NAME = "CheckVehicleOCR"
 SETTINGS_FILE = "settings.json"
-SETTINGS_VERSION = 18
+SETTINGS_VERSION = 19
 DEFAULT_TESSERACT_MANIFEST_URL = "https://github.com/NovWyatt/checkparking/releases/latest/download/tesseract-component-manifest.json"
 DEFAULT_MODEL_MANIFEST_URL = "https://github.com/NovWyatt/checkparking/releases/latest/download/model-manifest.json"
 
@@ -128,6 +128,20 @@ def migrate_settings(data: dict[str, Any]) -> dict[str, Any]:
     migrated.setdefault("tesseract_component_version", "")
     migrated.setdefault("tesseract_component_sha256", "")
     migrated.setdefault("tesseract_installed_at", "")
+    license_state = migrated.get("license")
+    normalized_license: dict[str, Any] = {}
+    if isinstance(license_state, dict):
+        device_id = str(license_state.get("device_id") or "").strip()
+        certificate = license_state.get("certificate")
+        signature = str(license_state.get("signature") or "").strip()
+        if device_id:
+            normalized_license["device_id"] = device_id
+        if isinstance(certificate, dict) and signature:
+            normalized_license["certificate"] = certificate
+            normalized_license["signature"] = signature
+    # A license key is never a setting.  Only a signed certificate and the
+    # locally generated installation ID are allowed to survive migration.
+    migrated["license"] = normalized_license
     engine = str(migrated.get("engine") or "PaddleOCR Local")
     recognition_mode = str(migrated.get("recognition_mode") or "").strip()
     if recognition_mode not in {"local", "local_ai_review", "online"}:

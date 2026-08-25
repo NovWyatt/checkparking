@@ -8,7 +8,7 @@
 
 Ứng dụng Windows giúp quét hàng loạt ảnh phương tiện, nhận diện biển số, kiểm tra kết quả và xuất Excel.
 
-**Phiên bản ổn định hiện tại:** v1.9.10
+**Phiên bản ổn định hiện tại:** v1.10.0
 
 [**⬇️ Tải bản mới nhất**](https://github.com/NovWyatt/checkparking/releases/latest)
 
@@ -50,6 +50,13 @@
 - Tesseract 5.5.3 làm OCR dự phòng.
 - Thông báo Telegram theo vòng đời batch.
 - Update Center cho ứng dụng, model OCR và component Tesseract.
+
+### Bản quyền
+
+- Bản phát hành v1.10.0 hỗ trợ key có thời hạn hoặc vĩnh viễn, mặc định một thiết bị cho mỗi key.
+- Key chỉ được gửi khi kích hoạt. Máy chỉ lưu mã cài đặt ngẫu nhiên và chứng nhận Ed25519 đã ký, không lưu key dạng chữ thường.
+- Chứng nhận được dùng offline tối đa 7 ngày. Khi cần kiểm tra lại hoặc khi quản trị viên thu hồi key, ứng dụng yêu cầu kết nối Internet trước khi tiếp tục quét, xuất Excel hoặc đối chiếu.
+- Hệ thống bản quyền không gửi ảnh OCR, file Excel hay danh sách biển số lên máy chủ bản quyền.
 
 ## Cài đặt
 

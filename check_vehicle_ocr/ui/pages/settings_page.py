@@ -23,6 +23,7 @@ class SettingsPage(Page):
         self.scrolls: dict[str, ScrollableFrame] = {}
         for key, title in (
             ("general", "Chung"),
+            ("license", "Bản quyền"),
             ("ai", "AI trực tuyến"),
             ("notifications", "Thông báo"),
             ("updates", "Cập nhật"),
@@ -39,6 +40,7 @@ class SettingsPage(Page):
             self.contents[key] = scroll.content
             self.scrolls[key] = scroll
         self._build_general(self.contents["general"], controller)
+        self._build_license(self.contents["license"], controller)
         self._build_ai(self.contents["ai"], controller)
         self._build_notifications(self.contents["notifications"], controller)
         self._build_updates(self.contents["updates"], controller)
@@ -62,6 +64,16 @@ class SettingsPage(Page):
         ttk.Checkbutton(card, text="Lưu khóa API cho lần sau", variable=controller.remember_key_var).grid(row=4, column=0, columnspan=2, sticky="w", pady=4)
         ttk.Button(card, text="Xóa khóa đã lưu", command=controller.clear_saved_key).grid(row=5, column=0, sticky="w", pady=(8, 2))
         ttk.Label(card, textvariable=controller.key_status_var, style="SurfaceMuted.TLabel", wraplength=700).grid(row=6, column=0, columnspan=2, sticky="w", pady=(6, 0))
+
+    def _build_license(self, parent, controller) -> None:
+        card = self._card(parent, "Bản quyền ứng dụng")
+        ttk.Label(card, textvariable=controller.license_status_var, style="Surface.TLabel", wraplength=760).grid(row=0, column=0, columnspan=2, sticky="w")
+        ttk.Label(card, textvariable=controller.license_details_var, style="SurfaceMuted.TLabel", wraplength=760).grid(row=1, column=0, columnspan=2, sticky="w", pady=(5, 12))
+        actions = ttk.Frame(card, style="Surface.TFrame")
+        actions.grid(row=2, column=0, columnspan=2, sticky="w")
+        ttk.Button(actions, text="Kích hoạt hoặc đổi key", command=controller.open_license_dialog, style="Primary.TButton").grid(row=0, column=0, padx=(0, 8))
+        controller.license_revalidate_button = ttk.Button(actions, text="Kiểm tra lại", command=controller.revalidate_license)
+        controller.license_revalidate_button.grid(row=0, column=1)
 
     def _build_ai(self, parent, controller) -> None:
         card = self._card(parent, "Dịch vụ AI trực tuyến")

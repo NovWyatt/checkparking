@@ -1,0 +1,21 @@
+{
+  "name": "checkvehicle-license-portal",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "test": "node --test test/*.test.mjs",
+    "dev": "vite --host 127.0.0.1",
+    "dev:worker": "wrangler dev",
+    "deploy": "npm run build && wrangler deploy",
+    "d1:migrate": "wrangler d1 migrations apply checkvehicle-license"
+  },
+  "dependencies": {
+    "@fluentui/web-components": "^2.6.1"
+  },
+  "devDependencies": {
+    "vite": "^7.1.7",
+    "wrangler": "^4.41.0"
+  }
+}

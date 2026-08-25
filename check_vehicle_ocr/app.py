@@ -26,6 +26,7 @@ from .gemini_vision import DEFAULT_GEMINI_MODEL, GEMINI_MODEL_CHOICES, GeminiVis
 from .gpt_vision import DEFAULT_GPT_MODEL, GPT_MODEL_CHOICES, GptVisionEngine
 from .image_io import collect_images, load_image
 from .hybrid_review import AiReviewPolicy, coerce_ai_review_policy, result_has_readable_plate, should_send_to_ai
+from .license_service import LicenseDecision, LicenseService, LicenseState, new_device_id
 from .candidate_scoring import apply_fallback_selection
 from .models import (
     BatchSession,
@@ -47,6 +48,7 @@ from .services.ocr_process import OcrProcessClient, OcrProcessCrashed, OcrProces
 from .services.worker_manager import WorkItem, WorkerManager, WorkerSettings
 from .telegram_notify import AsyncTelegramNotifier, TelegramSettings
 from .ui import ApplicationShell
+from .ui.license_dialog import LicenseActivationDialog
 from .ui.state import AppUiState
 from .ui.theme import colors as ui_colors, configure_styles
 from .runtime_manager import PaddleRuntimeManager, RuntimeStagingReport
@@ -271,6 +273,18 @@ class CheckVehicleApp(tk.Tk):
         self.export_worker: threading.Thread | None = None
         self.results_import_worker: threading.Thread | None = None
         self.reconciliation_worker: threading.Thread | None = None
+        self.license_worker: threading.Thread | None = None
+        self.license_dialog: LicenseActivationDialog | None = None
+        stored_license = self.settings.get("license") if isinstance(self.settings.get("license"), dict) else {}
+        self.license_device_id = str(stored_license.get("device_id") or "").strip() or new_device_id()
+        certificate = stored_license.get("certificate")
+        signature = str(stored_license.get("signature") or "")
+        self.license_state: dict[str, object] = {
+            "certificate": certificate if isinstance(certificate, dict) else None,
+            "signature": signature,
+        }
+        self.license_service = LicenseService()
+        self.license_decision = self.license_service.evaluate(self.license_state, self.license_device_id)
         self.stop_event = threading.Event()
         self.retry_failed_before_count = 0
         self._save_after_id: str | None = None
@@ -298,6 +312,8 @@ class CheckVehicleApp(tk.Tk):
         self.reformat_hint_var = tk.StringVar()
         self.export_status_var = tk.StringVar(value="Chưa có dữ liệu để xuất.")
         self.reconciliation_status_var = tk.StringVar(value="Chọn file OCR và báo phí để bắt đầu đối chiếu.")
+        self.license_status_var = tk.StringVar()
+        self.license_details_var = tk.StringVar()
         self.provider_status_var = tk.StringVar(value="Chưa kiểm tra kết nối.")
         self.telegram_status_var = tk.StringVar(value="Telegram đang tắt.")
         self.update_status_var = tk.StringVar(value="Chưa cấu hình")
@@ -339,6 +355,7 @@ class CheckVehicleApp(tk.Tk):
         self.model_activate_button: ttk.Button | None = None
         self.model_rollback_button: ttk.Button | None = None
         self.tesseract_manage_button: ttk.Button | None = None
+        self.license_revalidate_button: ttk.Button | None = None
         self.toggle_update_technical_details = None
         self.update_technical_details_visible = None
         self.settings_notebook: ttk.Notebook | None = None
@@ -537,6 +554,7 @@ class CheckVehicleApp(tk.Tk):
         self._on_plate_type_changed()
         self._on_expected_plate_count_changed()
         self._on_ai_review_policy_changed()
+        self._refresh_license_state()
         self._update_header_status()
         self._sync_local_ocr_control()
         self._update_key_status()
@@ -557,6 +575,8 @@ class CheckVehicleApp(tk.Tk):
             self.after_idle(lambda path=ui_assertion_path: self._write_ui_assertion(Path(path)))
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self._drain_after_id = self.after(100, self._drain_events)
+        if self.license_service.enforced:
+            self.after_idle(self._open_required_license_dialog_if_needed)
 
     def _build_ui(self) -> None:
         self.columnconfigure(0, weight=0)
@@ -1065,6 +1085,8 @@ class CheckVehicleApp(tk.Tk):
 
     def _start_processing(self, target_images: list[Path], retry_failed: bool = False) -> None:
         if self.worker and self.worker.is_alive():
+            return
+        if not self._license_operation_allowed():
             return
         if not target_images:
             self._notify("Hãy thêm ảnh hoặc thư mục trước khi bắt đầu quét.", "warning")
@@ -1967,6 +1989,9 @@ class CheckVehicleApp(tk.Tk):
                     _, message = event
                     self.status_var.set("Không mở được Excel")
                     self._notify(message, "error")
+                elif kind == "license_decision":
+                    _, decision = event
+                    self._apply_license_decision(decision)
                 elif kind == "provider_status":
                     _, status, values = event
                     self._apply_provider_status(status, values)
@@ -2112,6 +2137,159 @@ class CheckVehicleApp(tk.Tk):
         visible = self.update_technical_details_visible
         if callable(toggle) and (not callable(visible) or not visible()):
             toggle()
+
+    def _refresh_license_state(self) -> LicenseDecision:
+        """Re-evaluate only the signed local certificate, without network I/O."""
+
+        self.license_decision = self.license_service.evaluate(self.license_state, self.license_device_id)
+        self._update_license_display(self.license_decision)
+        return self.license_decision
+
+    def _update_license_display(self, decision: LicenseDecision) -> None:
+        if not self.license_service.enforced:
+            self.license_status_var.set("Bản phát triển chưa bật kiểm tra bản quyền.")
+            self.license_details_var.set("Bản phát hành chính thức sẽ kiểm tra với máy chủ bản quyền an toàn.")
+        elif decision.usable:
+            self.license_status_var.set("Bản quyền đang hoạt động")
+            self.license_details_var.set(decision.message)
+        else:
+            self.license_status_var.set("Cần xử lý bản quyền")
+            self.license_details_var.set(decision.message)
+
+        button = self.license_revalidate_button
+        if button is not None:
+            certificate = self.license_state.get("certificate")
+            can_revalidate = self.license_service.enforced and isinstance(certificate, dict) and not self._license_request_running()
+            button.configure(state="normal" if can_revalidate else "disabled")
+
+    def _license_settings_payload(self) -> dict[str, object]:
+        """Return the non-secret activation record allowed in settings.json."""
+
+        certificate = self.license_state.get("certificate")
+        signature = str(self.license_state.get("signature") or "")
+        payload: dict[str, object] = {"device_id": self.license_device_id}
+        if isinstance(certificate, dict) and signature:
+            payload["certificate"] = certificate
+            payload["signature"] = signature
+        return payload
+
+    def _license_request_running(self) -> bool:
+        return bool(self.license_worker and self.license_worker.is_alive())
+
+    def _license_operation_allowed(self) -> bool:
+        decision = self._refresh_license_state()
+        if decision.usable:
+            return True
+        self._show_license_dialog(decision, required=False)
+        self._notify(decision.message, "warning")
+        return False
+
+    def _open_required_license_dialog_if_needed(self) -> None:
+        decision = self._refresh_license_state()
+        if decision.usable:
+            return
+        self._show_license_dialog(decision, required=True)
+        if decision.state is LicenseState.REQUIRES_REVALIDATION:
+            self.revalidate_license()
+
+    def open_license_dialog(self) -> None:
+        if not self.license_service.enforced:
+            self._notify("Bản phát triển chưa có máy chủ bản quyền để kích hoạt.", "info")
+            return
+        self._show_license_dialog(self._refresh_license_state(), required=False, allow_activation=True)
+
+    def _show_license_dialog(
+        self,
+        decision: LicenseDecision,
+        *,
+        required: bool,
+        allow_activation: bool = False,
+    ) -> None:
+        dialog = self.license_dialog
+        if dialog is not None and dialog.winfo_exists():
+            dialog.update_decision(decision)
+            dialog.deiconify()
+            dialog.lift()
+            dialog.focus_force()
+            return
+        self.license_dialog = LicenseActivationDialog(
+            self,
+            decision,
+            self.activate_license,
+            self.revalidate_license,
+            required=required,
+            allow_activation=allow_activation,
+        )
+
+    def activate_license(self, key: str) -> None:
+        if self._license_request_running():
+            return
+        dialog = self.license_dialog
+        if dialog is not None and dialog.winfo_exists():
+            dialog.set_busy("Đang kích hoạt key với máy chủ bản quyền...")
+        self.license_worker = threading.Thread(
+            target=self._worker_activate_license,
+            args=(key,),
+            daemon=True,
+            name="check_vehicle_license_activate",
+        )
+        self.license_worker.start()
+        self._update_license_display(self.license_decision)
+
+    def _worker_activate_license(self, key: str) -> None:
+        try:
+            decision = self.license_service.activate(key, self.license_device_id, "Windows")
+        except Exception:
+            decision = LicenseDecision(LicenseState.NETWORK_ERROR, "Không thể kích hoạt lúc này. Kiểm tra Internet rồi thử lại.")
+        self.event_queue.put(("license_decision", decision))
+
+    def revalidate_license(self) -> None:
+        if self._license_request_running():
+            return
+        certificate = self.license_state.get("certificate")
+        license_id = str(certificate.get("license_id") or "") if isinstance(certificate, dict) else ""
+        if not license_id:
+            decision = LicenseDecision(LicenseState.NEEDS_ACTIVATION, "Nhập key bản quyền để kích hoạt ứng dụng.")
+            self.license_decision = decision
+            self._update_license_display(decision)
+            dialog = self.license_dialog
+            if dialog is not None and dialog.winfo_exists():
+                dialog.update_decision(decision)
+            return
+        dialog = self.license_dialog
+        if dialog is not None and dialog.winfo_exists():
+            dialog.set_busy("Đang kiểm tra lại bản quyền...")
+        self.license_worker = threading.Thread(
+            target=self._worker_revalidate_license,
+            args=(license_id,),
+            daemon=True,
+            name="check_vehicle_license_revalidate",
+        )
+        self.license_worker.start()
+        self._update_license_display(self.license_decision)
+
+    def _worker_revalidate_license(self, license_id: str) -> None:
+        try:
+            decision = self.license_service.revalidate(license_id, self.license_device_id)
+        except Exception:
+            decision = LicenseDecision(LicenseState.NETWORK_ERROR, "Không thể kết nối máy chủ bản quyền. Kiểm tra Internet rồi thử lại.")
+        self.event_queue.put(("license_decision", decision))
+
+    def _apply_license_decision(self, decision: LicenseDecision) -> None:
+        if decision.certificate is not None and decision.signature:
+            self.license_state = {"certificate": decision.certificate, "signature": decision.signature}
+        self.license_decision = decision
+        self._update_license_display(decision)
+        if decision.usable:
+            self._save_settings()
+        dialog = self.license_dialog
+        if dialog is not None and dialog.winfo_exists():
+            if decision.usable:
+                dialog.destroy()
+                self.license_dialog = None
+                self._notify("Bản quyền đã được xác thực.", "success")
+            else:
+                dialog.update_decision(decision)
 
     def _on_recognition_mode_changed(self) -> None:
         mode = self.recognition_mode_var.get().strip()
@@ -2432,6 +2610,8 @@ class CheckVehicleApp(tk.Tk):
 
     def start_reconciliation(self) -> None:
         if self.reconciliation_worker and self.reconciliation_worker.is_alive():
+            return
+        if not self._license_operation_allowed():
             return
         if not self.reconciliation_ready():
             self.reconciliation_status_var.set("Hãy chọn file OCR, báo phí và file phần mềm nếu đã bật đối chiếu phần mềm.")
@@ -3155,6 +3335,8 @@ class CheckVehicleApp(tk.Tk):
             self._notify("Hãy quét ảnh trước khi xuất Excel.", "warning")
             return
         if self.export_worker and self.export_worker.is_alive():
+            return
+        if not self._license_operation_allowed():
             return
         self._save_detail_edits()
         self._save_settings()
@@ -4036,6 +4218,7 @@ class CheckVehicleApp(tk.Tk):
                 "export_reviewed_only": bool(self.export_reviewed_only_var.get()),
                 "reconciliation_compare_software": bool(self.reconciliation_compare_software_var.get()),
                 "reconciliation_suffix_length": self._reconciliation_suffix_length(),
+                "license": self._license_settings_payload(),
                 "dark_mode": bool(self.dark_mode_var.get()),
                 "output_dir": output_dir,
                 "provider_configs": {"custom_openai": self._custom_provider_snapshot()},

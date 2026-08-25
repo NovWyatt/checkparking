@@ -1,0 +1,27 @@
+{
+  "name": "checkvehicle-license",
+  "main": "src/worker.js",
+  "compatibility_date": "2026-08-25",
+  "vars": {
+    "OFFLINE_GRACE_DAYS": "7"
+  },
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "run_worker_first": ["/api/*"]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "checkvehicle-license",
+      "database_id": "dc40df58-29b4-4340-968f-19cb3d194d9a",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "routes": [
+    {
+      "pattern": "license.wyattos.cyou",
+      "custom_domain": true
+    }
+  ]
+}

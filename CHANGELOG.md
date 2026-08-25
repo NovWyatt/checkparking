@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.10.0 - Bản quyền có thể thu hồi
+
+- Thêm kích hoạt key có thời hạn hoặc vĩnh viễn, mặc định một thiết bị cho mỗi key.
+- Quét ảnh, xuất Excel và đối chiếu chỉ hoạt động khi chứng nhận bản quyền hợp lệ.
+- Chứng nhận Ed25519 cho phép làm việc offline tối đa 7 ngày; khi xác thực lại, key bị thu hồi hoặc hết hạn sẽ bị chặn.
+- Thêm tab **Bản quyền** và màn hình kích hoạt rõ trạng thái, không lưu key gốc trong cấu hình máy.
+- Trang quản trị Cloudflare cho phép cấp key, thu hồi key và đặt lại thiết bị bằng mã quản trị bí mật.
+
 ## 1.9.10 - Hiện lại crop biển số
 
 - Khung **Crop biển số** trong Kết quả tự cắt từ ảnh gốc theo vùng detector nếu pipeline không còn file crop riêng.
